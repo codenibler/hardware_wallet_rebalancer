@@ -38,7 +38,8 @@ systemctl --user list-timers hwr-check.timer
 
 The example timer runs Sundays at 20:00 local time. Edit `OnCalendar` to
 change the schedule. It passes `--no-prompt`, so each scheduled check uses a
-zero top-up and cannot wait for interactive input.
+zero top-up and cannot wait for interactive input. Telegram delivery is the
+default and requires no send flag.
 
 ## Logs
 

@@ -7,6 +7,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/Projects/hardware_wallet_rebalancer
 EnvironmentFile=%h/Projects/hardware_wallet_rebalancer/.env
-ExecStart=%h/Projects/hardware_wallet_rebalancer/.venv/bin/python run_rebalancer.py --no-prompt --send-telegram
+ExecStart=%h/Projects/hardware_wallet_rebalancer/.venv/bin/python run_rebalancer.py --no-prompt
 NoNewPrivileges=true
 PrivateTmp=true

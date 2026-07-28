@@ -25,7 +25,7 @@ a recovery seed, PIN, passphrase, or private key.
 - Fee-aware indicative buy/sell calculations.
 - Interactive top-up input for new USD capital.
 - Human-readable and JSON output.
-- One-shot Telegram delivery or an allowlisted `/check [top_up]` bot.
+- Default Telegram delivery and an allowlisted `/check [top_up]` bot.
 - Deterministic offline demo and unit tests.
 
 No automatic trade execution is included by design.
@@ -56,6 +56,9 @@ Enter new USD top-up amount [0]:
 Enter the new amount, or press Enter to use zero. For unattended runs, pass
 `--no-prompt`; this explicitly uses a zero top-up.
 
+Every successful check sends its text report to `TELEGRAM_CHAT_ID` by default.
+Use `--no-telegram` only for offline demos or local troubleshooting.
+
 The top-up is uninvested USD cash that is not already included in the fetched
 wallet balances. The planner:
 
@@ -77,7 +80,8 @@ The demo makes no provider or wallet calls:
 ```bash
 python run_rebalancer.py \
   --holdings-file examples/demo_holdings.json \
-  --prices-file examples/demo_prices.json
+  --prices-file examples/demo_prices.json \
+  --no-telegram
 ```
 
 Enter `1000` when prompted to reproduce the top-up example.
@@ -96,13 +100,13 @@ After messaging the bot with `/start`, discover the private chat ID:
 python -m wallet_rebalancer discover-telegram
 ```
 
-For one-shot delivery:
+For one-shot delivery, run the normal check:
 
 ```bash
-python run_rebalancer.py --send-telegram
+python run_rebalancer.py
 ```
 
-Enter the top-up when prompted before the report is sent.
+Enter the top-up when prompted; the report is sent automatically.
 
 For an allowlisted long-running bot:
 

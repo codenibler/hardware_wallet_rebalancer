@@ -190,9 +190,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON",
     )
     check.add_argument(
-        "--send-telegram",
+        "--no-telegram",
         action="store_true",
-        help="Also send the text report to TELEGRAM_CHAT_ID",
+        help="Do not send the report to the configured Telegram chat",
     )
 
     discover = subparsers.add_parser(
@@ -227,7 +227,7 @@ def _check_command(args: argparse.Namespace) -> int:
     text_report = render_text(plan)
     print(render_json(plan) if args.json else text_report, end="" if args.json else "\n")
 
-    if args.send_telegram:
+    if not args.no_telegram:
         token = _require_env("TELEGRAM_BOT_TOKEN")
         chat_id = _require_env("TELEGRAM_CHAT_ID")
         TelegramClient(token).send_message(chat_id, text_report)

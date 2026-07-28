@@ -130,7 +130,8 @@ Blockbook's canonical V2 interface is documented in its
 python -m unittest discover -v
 python run_rebalancer.py \
   --holdings-file examples/demo_holdings.json \
-  --prices-file examples/demo_prices.json
+  --prices-file examples/demo_prices.json \
+  --no-telegram
 ```
 
 Enter `1000` at the prompt for the example top-up, or press Enter for zero.
@@ -159,13 +160,14 @@ network, or staking position.
 6. Put the resulting numeric ID in both `TELEGRAM_CHAT_ID` and
    `TELEGRAM_ALLOWED_CHAT_IDS`.
 
-One-shot notification:
+Every normal check sends a one-shot notification:
 
 ```bash
-python run_rebalancer.py --send-telegram
+python run_rebalancer.py
 ```
 
-Enter the new USD top-up amount when prompted.
+Enter the new USD top-up amount when prompted. Use `--no-telegram` only when
+you deliberately want local output without a notification.
 
 Interactive bot:
 
