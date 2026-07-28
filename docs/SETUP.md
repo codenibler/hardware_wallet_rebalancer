@@ -104,11 +104,16 @@ Edit `.env`:
 
 ```dotenv
 HWR_THRESHOLD=0.05
-HWR_ESTIMATED_FEE_BPS=10
+HWR_ESTIMATED_FEE_BPS=50
 ```
 
 The threshold is an absolute portfolio-weight gap. At 5%, BTC triggers below
 45% or above 55%; LINK triggers below 5% or above 15%.
+
+The fee value is applied to the gross value of every buy and sell. `50` means
+0.50%. Live configuration rejects zero so the plan cannot silently assume
+costless execution. Replace 50 with an estimate appropriate to the selected
+venue and current network conditions.
 
 The public defaults are convenient, not guaranteed services. For durable
 operation, replace the `.env` endpoints with providers you operate or have a

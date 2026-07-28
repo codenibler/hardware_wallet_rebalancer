@@ -26,6 +26,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(len(config.wallet.bitcoin_xpubs), 1)
         self.assertEqual(str(config.policy.threshold), "0.05")
+        self.assertEqual(config.policy.estimated_fee_bps, 50)
         self.assertEqual(sum(config.policy.target_weights.values()), 1)
 
     def test_comma_separated_wallet_identifiers_load(self) -> None:
@@ -59,6 +60,10 @@ class ConfigTests(unittest.TestCase):
     def test_invalid_boolean_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "true or false"):
             self.load_with_env(HWR_INCLUDE_UNCONFIRMED_BITCOIN="sometimes")
+
+    def test_zero_live_fee_assumption_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "HWR_ESTIMATED_FEE_BPS"):
+            self.load_with_env(HWR_ESTIMATED_FEE_BPS="0")
 
     def test_non_https_remote_provider_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "HTTPS"):

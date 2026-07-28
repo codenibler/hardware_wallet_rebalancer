@@ -60,6 +60,13 @@ class CheckArgumentTests(unittest.TestCase):
         ):
             build_parser().parse_args(["check", "--send-telegram"])
 
+    def test_zero_fee_override_is_rejected(self) -> None:
+        with (
+            patch("sys.stderr", new_callable=io.StringIO),
+            self.assertRaises(SystemExit),
+        ):
+            build_parser().parse_args(["check", "--fee-bps", "0"])
+
 
 class TelegramDeliveryTests(unittest.TestCase):
     def test_check_sends_to_telegram_by_default(self) -> None:

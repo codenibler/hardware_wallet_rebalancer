@@ -222,7 +222,7 @@ def load_config() -> AppConfig:
     threshold = _decimal_env("HWR_THRESHOLD", Decimal("0.05"))
     estimated_fee_bps = _decimal_env(
         "HWR_ESTIMATED_FEE_BPS",
-        Decimal("0"),
+        Decimal("50"),
     )
     include_unconfirmed = _boolean_env(
         "HWR_INCLUDE_UNCONFIRMED_BITCOIN",
@@ -234,8 +234,8 @@ def load_config() -> AppConfig:
     )
     if threshold < 0 or threshold > 1:
         raise ValueError("HWR_THRESHOLD must be between 0 and 1")
-    if estimated_fee_bps < 0 or estimated_fee_bps > 1_000:
-        raise ValueError("HWR_ESTIMATED_FEE_BPS must be in [0, 1000]")
+    if estimated_fee_bps <= 0 or estimated_fee_bps > 1_000:
+        raise ValueError("HWR_ESTIMATED_FEE_BPS must be in (0, 1000]")
     if max_price_age_seconds <= 0:
         raise ValueError("HWR_MAX_PRICE_AGE_SECONDS must be positive")
 

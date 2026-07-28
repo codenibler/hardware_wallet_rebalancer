@@ -43,7 +43,7 @@ Fill `.env` using [the export instructions](docs/SETUP.md), then run:
 
 ```bash
 python run_rebalancer.py
-python run_rebalancer.py --fee-bps 10
+python run_rebalancer.py --fee-bps 75
 python run_rebalancer.py --json
 ```
 
@@ -69,6 +69,11 @@ wallet balances. The planner:
 3. estimates costs on gross buys and sells;
 4. solves the post-fee target portfolio;
 5. reports asset units and EUR notionals at the same price snapshot.
+
+The default execution-cost assumption is 50 basis points (0.50%) on every
+euro bought or sold. Zero is rejected for live checks. Set
+`HWR_ESTIMATED_FEE_BPS` to a nonzero venue-appropriate estimate; Telegram
+shows both the per-order approximation and total estimated fees.
 
 If no threshold is breached and no top-up is supplied, it states that no
 rebalance is needed. If the allocation is within its band but a top-up is

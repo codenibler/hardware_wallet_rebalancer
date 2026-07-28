@@ -65,10 +65,14 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(order_lines[2].startswith("🟢 ETH,"))
         self.assertTrue(order_lines[3].startswith("🟢 LINK,"))
         self.assertTrue(order_lines[4].startswith("🟢 SOL,"))
-        self.assertIn("€300.00, reason=rebalance sell", order_lines[1])
-        self.assertTrue(
-            all("reason=rebalance buy" in line for line in order_lines[2:])
+        self.assertIn(
+            "€300.00, fee≈€0.00, reason=rebalance sell",
+            order_lines[1],
         )
+        self.assertTrue(
+            all("reason=rebalance buy" in line for line in order_lines[2:-1])
+        )
+        self.assertTrue(order_lines[-1].startswith("Estimated total fees:"))
 
     def test_balanced_top_up_is_allocated_by_target(self) -> None:
         plan = build_plan(
@@ -159,6 +163,10 @@ class PlannerTests(unittest.TestCase):
             Decimal("1100") - plan.estimated_fees_eur,
             places=7,
         )
+        fee_message = render_order_message(plan)
+        self.assertIn("50 bps on gross traded value", fee_message)
+        self.assertIn("fee≈€", fee_message)
+        self.assertIn("Estimated total fees: €", fee_message)
 
     def test_json_keeps_decimal_precision_as_strings(self) -> None:
         plan = build_plan(
@@ -182,6 +190,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(payload["assets"]["BTC"]["amount"], "0.1")
         self.assertIn("price_eur", payload["assets"]["BTC"])
         self.assertNotIn("price_usd", payload["assets"]["BTC"])
+        self.assertEqual(payload["estimated_fee_bps"], "0")
 
 
 if __name__ == "__main__":

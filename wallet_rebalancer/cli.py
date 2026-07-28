@@ -31,6 +31,13 @@ def _non_negative_decimal(value: str) -> Decimal:
     return parsed
 
 
+def _positive_decimal(value: str) -> Decimal:
+    parsed = _non_negative_decimal(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
 def _prompt_top_up() -> Decimal:
     while True:
         print(
@@ -152,7 +159,7 @@ def _add_policy_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--fee-bps",
-        type=_non_negative_decimal,
+        type=_positive_decimal,
         help="Override estimated fee bps on every euro bought or sold",
     )
 

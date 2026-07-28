@@ -167,6 +167,7 @@ def build_plan(
         trades=tuple(trades),
         current_total_eur=current_total,
         top_up_eur=top_up,
+        estimated_fee_bps=fee_bps,
         estimated_fees_eur=estimated_fees,
         desired_invested_total_eur=desired_total,
         threshold=threshold_value,

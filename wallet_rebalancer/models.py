@@ -100,6 +100,7 @@ class PortfolioPlan:
     trades: tuple[TradeInstruction, ...]
     current_total_eur: Decimal
     top_up_eur: Decimal
+    estimated_fee_bps: Decimal
     estimated_fees_eur: Decimal
     desired_invested_total_eur: Decimal
     threshold: Decimal

@@ -63,7 +63,10 @@ def render_text(plan: PortfolioPlan) -> str:
         f"Current value:    {_money(plan.current_total_eur)}",
         f"Top-up capital:   {_money(plan.top_up_eur)}",
         f"Post-fee target:  {_money(plan.desired_invested_total_eur)}",
-        f"Estimated fees:   {_money(plan.estimated_fees_eur)}",
+        (
+            f"Estimated fees:   {_money(plan.estimated_fees_eur)} "
+            f"({plan.estimated_fee_bps} bps)"
+        ),
         "",
         "CURRENT AND DESIRED HOLDINGS",
         "Asset | Units now | EUR now | Weight | Target | Desired units | Desired EUR",
@@ -149,9 +152,18 @@ def render_order_message(plan: PortfolioPlan) -> str:
 
     lines = ["These are the planned orders (not submitted):"]
     if not plan.has_trade_plan or not plan.trades:
-        lines.append("No planned orders.")
+        lines.extend(
+            [
+                "No planned orders.",
+                (
+                    f"Estimated total fees: {_money(plan.estimated_fees_eur)} "
+                    f"({plan.estimated_fee_bps} bps assumption)"
+                ),
+            ]
+        )
         return "\n".join(lines)
 
+    fee_rate = plan.estimated_fee_bps / Decimal("10000")
     for trade in plan.trades:
         marker = "🔴" if trade.side == "SELL" else "🟢"
         if plan.threshold_rebalance_needed:
@@ -161,8 +173,14 @@ def render_order_message(plan: PortfolioPlan) -> str:
         lines.append(
             f"{marker} {trade.asset}, "
             f"{_amount(trade.asset, trade.amount)} {trade.asset}, "
-            f"{_money(trade.notional_eur)}, reason={reason}"
+            f"{_money(trade.notional_eur)}, "
+            f"fee≈{_money(trade.notional_eur * fee_rate)}, "
+            f"reason={reason}"
         )
+    lines.append(
+        f"Estimated total fees: {_money(plan.estimated_fees_eur)} "
+        f"({plan.estimated_fee_bps} bps on gross traded value)"
+    )
     return "\n".join(lines)
 
 
@@ -193,6 +211,7 @@ def plan_to_dict(plan: PortfolioPlan) -> dict[str, Any]:
         "max_abs_drift": str(plan.max_abs_drift),
         "current_total_eur": str(plan.current_total_eur),
         "top_up_eur": str(plan.top_up_eur),
+        "estimated_fee_bps": str(plan.estimated_fee_bps),
         "estimated_fees_eur": str(plan.estimated_fees_eur),
         "desired_invested_total_eur": str(plan.desired_invested_total_eur),
         "minimum_top_up_for_buy_only_eur": str(
