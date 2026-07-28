@@ -144,6 +144,28 @@ def render_text(plan: PortfolioPlan) -> str:
     return "\n".join(lines)
 
 
+def render_order_message(plan: PortfolioPlan) -> str:
+    """Render an ordered Telegram list of proposed trades."""
+
+    lines = ["These are the planned orders (not submitted):"]
+    if not plan.has_trade_plan or not plan.trades:
+        lines.append("No planned orders.")
+        return "\n".join(lines)
+
+    for trade in plan.trades:
+        marker = "🔴" if trade.side == "SELL" else "🟢"
+        if plan.threshold_rebalance_needed:
+            reason = f"rebalance {trade.side.lower()}"
+        else:
+            reason = "top-up allocation"
+        lines.append(
+            f"{marker} {trade.asset}, "
+            f"{_amount(trade.asset, trade.amount)} {trade.asset}, "
+            f"{_money(trade.notional_eur)}, reason={reason}"
+        )
+    return "\n".join(lines)
+
+
 def plan_to_dict(plan: PortfolioPlan) -> dict[str, Any]:
     """Return a JSON-safe audit representation with decimals kept as strings."""
 

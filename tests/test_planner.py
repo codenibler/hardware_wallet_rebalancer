@@ -6,7 +6,11 @@ from decimal import Decimal
 
 from wallet_rebalancer.models import Holdings, PriceBook
 from wallet_rebalancer.planner import build_plan
-from wallet_rebalancer.reporting import plan_to_dict, render_text
+from wallet_rebalancer.reporting import (
+    plan_to_dict,
+    render_order_message,
+    render_text,
+)
 
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
@@ -52,6 +56,19 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(trades[("BUY", "ETH")].notional_eur, Decimal("150.00"))
         self.assertEqual(trades[("BUY", "SOL")].notional_eur, Decimal("100.00"))
         self.assertEqual(trades[("BUY", "LINK")].notional_eur, Decimal("50.00"))
+        order_lines = render_order_message(plan).splitlines()
+        self.assertEqual(
+            order_lines[0],
+            "These are the planned orders (not submitted):",
+        )
+        self.assertTrue(order_lines[1].startswith("🔴 BTC,"))
+        self.assertTrue(order_lines[2].startswith("🟢 ETH,"))
+        self.assertTrue(order_lines[3].startswith("🟢 LINK,"))
+        self.assertTrue(order_lines[4].startswith("🟢 SOL,"))
+        self.assertIn("€300.00, reason=rebalance sell", order_lines[1])
+        self.assertTrue(
+            all("reason=rebalance buy" in line for line in order_lines[2:])
+        )
 
     def test_balanced_top_up_is_allocated_by_target(self) -> None:
         plan = build_plan(
@@ -78,6 +95,9 @@ class PlannerTests(unittest.TestCase):
             },
         )
         self.assertIn("TOP-UP PLAN AVAILABLE", render_text(plan))
+        top_up_message = render_order_message(plan)
+        self.assertIn("reason=top-up allocation", top_up_message)
+        self.assertNotIn("🔴", top_up_message)
 
     def test_top_up_required_for_buy_only_is_calculated(self) -> None:
         plan = build_plan(

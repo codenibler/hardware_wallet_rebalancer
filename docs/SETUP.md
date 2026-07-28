@@ -160,8 +160,8 @@ network, or staking position.
 6. Put the resulting numeric ID in both `TELEGRAM_CHAT_ID` and
    `TELEGRAM_ALLOWED_CHAT_IDS`.
 
-Every normal check sends a visual one-shot notification with green BUY cards
-and red SELL cards:
+Every normal check sends an ordered one-shot notification with red SELL lines
+first and green BUY lines afterward:
 
 ```bash
 python run_rebalancer.py
