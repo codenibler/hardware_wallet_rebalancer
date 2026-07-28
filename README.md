@@ -23,7 +23,7 @@ a recovery seed, PIN, passphrase, or private key.
 - Native SOL lookup for multiple primary and explicitly listed stake accounts.
 - 5-percentage-point maximum drift threshold by default.
 - Fee-aware indicative buy/sell calculations.
-- `--top-up` support for new USD capital.
+- Interactive top-up input for new USD capital.
 - Human-readable and JSON output.
 - One-shot Telegram delivery or an allowlisted `/check [top_up]` bot.
 - Deterministic offline demo and unit tests.
@@ -43,10 +43,18 @@ Fill `config.toml` using [the export instructions](docs/SETUP.md), then run:
 
 ```bash
 python run_rebalancer.py
-python run_rebalancer.py --top-up 1000
-python run_rebalancer.py --top-up 1000 --fee-bps 10
+python run_rebalancer.py --fee-bps 10
 python run_rebalancer.py --json
 ```
+
+Each check asks:
+
+```text
+Enter new USD top-up amount [0]:
+```
+
+Enter the new amount, or press Enter to use zero. For unattended runs, pass
+`--no-prompt`; this explicitly uses a zero top-up.
 
 The top-up is uninvested USD cash that is not already included in the fetched
 wallet balances. The planner:
@@ -70,9 +78,10 @@ The demo makes no provider or wallet calls:
 python run_rebalancer.py \
   --config examples/demo_config.toml \
   --holdings-file examples/demo_holdings.json \
-  --prices-file examples/demo_prices.json \
-  --top-up 1000
+  --prices-file examples/demo_prices.json
 ```
+
+Enter `1000` when prompted to reproduce the top-up example.
 
 ## Telegram
 
@@ -91,8 +100,10 @@ python -m wallet_rebalancer discover-telegram
 For one-shot delivery:
 
 ```bash
-python run_rebalancer.py --top-up 1000 --send-telegram
+python run_rebalancer.py --send-telegram
 ```
+
+Enter the top-up when prompted before the report is sent.
 
 For an allowlisted long-running bot:
 

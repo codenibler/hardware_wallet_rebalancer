@@ -123,9 +123,10 @@ python -m unittest discover -v
 python run_rebalancer.py \
   --config examples/demo_config.toml \
   --holdings-file examples/demo_holdings.json \
-  --prices-file examples/demo_prices.json \
-  --top-up 1000
+  --prices-file examples/demo_prices.json
 ```
+
+Enter `1000` at the prompt for the example top-up, or press Enter for zero.
 
 ## 6. First live run
 
@@ -133,6 +134,8 @@ python run_rebalancer.py \
 python run_rebalancer.py --json
 python run_rebalancer.py
 ```
+
+Both commands ask for the new USD top-up amount. Press Enter to use zero.
 
 Before acting, compare every fetched asset amount with Trezor Suite. Resolve
 any discrepancy first—usually it means a missing account, passphrase wallet,
@@ -154,6 +157,8 @@ One-shot notification:
 ```bash
 python run_rebalancer.py --send-telegram
 ```
+
+Enter the new USD top-up amount when prompted.
 
 Interactive bot:
 

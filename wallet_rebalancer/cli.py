@@ -31,6 +31,30 @@ def _non_negative_decimal(value: str) -> Decimal:
     return parsed
 
 
+def _prompt_top_up() -> Decimal:
+    while True:
+        print(
+            "Enter new USD top-up amount [0]: ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            raw_value = input()
+        except EOFError as exc:
+            raise ValueError(
+                "No top-up input received; rerun interactively or use --no-prompt"
+            ) from exc
+
+        if not raw_value.strip():
+            return Decimal("0")
+
+        try:
+            return _non_negative_decimal(raw_value.strip())
+        except argparse.ArgumentTypeError as exc:
+            print(f"Invalid amount: {exc}. Please try again.", file=sys.stderr)
+
+
 def _parse_datetime(value: object, label: str) -> datetime:
     if not isinstance(value, str):
         raise ValueError(f"{label} must be an ISO-8601 string")
@@ -152,12 +176,9 @@ def build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("check", help="Run one portfolio check")
     _add_policy_args(check)
     check.add_argument(
-        "--top-up",
-        "--top-up-usd",
-        dest="top_up",
-        type=_non_negative_decimal,
-        default=Decimal("0"),
-        help="New USD cash to deploy (default: 0)",
+        "--no-prompt",
+        action="store_true",
+        help="Use a zero top-up without prompting (for automation)",
     )
     check.add_argument(
         "--holdings-file",
@@ -207,6 +228,7 @@ def _require_env(name: str) -> str:
 
 def _check_command(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
     plan = _plan_from_args(args, config)
     text_report = render_text(plan)
     print(render_json(plan) if args.json else text_report, end="" if args.json else "\n")
