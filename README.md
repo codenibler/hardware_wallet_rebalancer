@@ -1,0 +1,144 @@
+# Hardware wallet rebalancer
+
+A read-only Trezor portfolio monitor and transaction planner for:
+
+- 50% BTC
+- 25% ETH
+- 15% SOL
+- 10% LINK
+
+The program reads public blockchain balances, obtains current USD prices, and
+checks whether any asset is outside a configurable allocation band. It never
+asks the Trezor to sign, never broadcasts transactions, and must never receive
+a recovery seed, PIN, passphrase, or private key.
+
+> Coins are recorded on their blockchains, not inside the Trezor. The exported
+> public account identifiers let this program monitor those blockchain balances
+> while the device remains disconnected.
+
+## Features
+
+- Bitcoin account-wide lookup using one or more XPUBs.
+- Native ETH and Ethereum-mainnet LINK lookup for multiple Ethereum accounts.
+- Native SOL lookup for multiple primary and explicitly listed stake accounts.
+- 5-percentage-point maximum drift threshold by default.
+- Fee-aware indicative buy/sell calculations.
+- `--top-up` support for new USD capital.
+- Human-readable and JSON output.
+- One-shot Telegram delivery or an allowlisted `/check [top_up]` bot.
+- Deterministic offline demo and unit tests.
+
+No automatic trade execution is included by design.
+
+## Quick start
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+cp config.example.toml config.toml
+```
+
+Fill `config.toml` using [the export instructions](docs/SETUP.md), then run:
+
+```bash
+python run_rebalancer.py
+python run_rebalancer.py --top-up 1000
+python run_rebalancer.py --top-up 1000 --fee-bps 10
+python run_rebalancer.py --json
+```
+
+The top-up is uninvested USD cash that is not already included in the fetched
+wallet balances. The planner:
+
+1. values the current holdings;
+2. adds the top-up;
+3. estimates costs on gross buys and sells;
+4. solves the post-fee target portfolio;
+5. reports asset units and USD notionals at the same price snapshot.
+
+If no threshold is breached and no top-up is supplied, it states that no
+rebalance is needed. If the allocation is within its band but a top-up is
+supplied, it keeps the “no threshold rebalance” result and provides a separate
+top-up deployment plan.
+
+## Offline demo
+
+The demo makes no provider or wallet calls:
+
+```bash
+python run_rebalancer.py \
+  --config examples/demo_config.toml \
+  --holdings-file examples/demo_holdings.json \
+  --prices-file examples/demo_prices.json \
+  --top-up 1000
+```
+
+## Telegram
+
+The bot token and chat IDs belong in an ignored `.env` file, never in source:
+
+```bash
+cp .env.example .env
+```
+
+After messaging the bot with `/start`, discover the private chat ID:
+
+```bash
+python -m wallet_rebalancer discover-telegram
+```
+
+For one-shot delivery:
+
+```bash
+python run_rebalancer.py --top-up 1000 --send-telegram
+```
+
+For an allowlisted long-running bot:
+
+```bash
+python -m wallet_rebalancer bot
+```
+
+Then send `/check` or `/check 1000`. Bot mode refuses to start without
+`TELEGRAM_ALLOWED_CHAT_IDS`.
+
+If a bot token has ever appeared in chat, source control, logs, or screenshots,
+revoke it in BotFather and generate a new one before use.
+
+## Important scope limits
+
+- LINK means the official ERC-20 LINK contract on Ethereum mainnet.
+- ETH deposited into staking, lending, bridging, or other smart contracts is
+  not the same as liquid native ETH at the configured address and is not
+  automatically discovered.
+- SOL in separately created stake accounts is counted only when those account
+  addresses are listed in `solana_stake_accounts`.
+- Assets held on exchanges, other networks, passphrase wallets, or unlisted
+  accounts are not visible.
+- Public providers learn the queried addresses or XPUB. Self-hosted/private
+  providers improve privacy and reliability.
+- “Precise” quantities are precise only for the fetched balances, one market
+  snapshot, and the configured cost estimate. Market movement, spread, gas,
+  withdrawal fees, minimum order sizes, taxes, and rounding change execution.
+
+Read [SECURITY.md](docs/SECURITY.md) before entering real public identifiers.
+
+## Validation
+
+```bash
+python -m unittest discover -v
+```
+
+## Data interfaces
+
+The implementation follows the current official documentation for:
+
+- [Trezor XPUB export and privacy](https://trezor.io/learn/supported-assets/bitcoin/what-is-a-public-key-xpub)
+- [Trezor Ethereum and ERC-20 accounts](https://trezor.io/learn/supported-assets/ethereum-layer-2-EVM/ethereum-erc-20-tokens-on-trezor)
+- [Trezor Solana receive addresses](https://trezor.io/learn/supported-assets/solana/managing-solana-tokens-in-trezor-suite)
+- [Trezor Blockbook API V2](https://github.com/trezor/blockbook/blob/master/docs/api.md)
+- [Ethereum JSON-RPC](https://ethereum.org/developers/docs/apis/json-rpc/)
+- [Solana `getBalance`](https://solana.com/docs/rpc/http/getbalance)
+- [CoinGecko keyless public API](https://docs.coingecko.com/docs/keyless-public-api)
+- [Telegram Bot API](https://core.telegram.org/bots/api)

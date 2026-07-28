@@ -1,0 +1,49 @@
+[wallet]
+# Export one XPUB for EVERY Bitcoin account and account type with funds.
+# Examples may begin xpub, ypub, zpub, Ypub, Zpub, tpub, upub, or vpub.
+bitcoin_xpubs = [
+  "replace_with_bitcoin_account_xpub",
+]
+
+# LINK is assumed to be the Ethereum-mainnet ERC-20 token and is read from
+# these same Ethereum account addresses.
+ethereum_addresses = [
+  "replace_with_ethereum_receive_address",
+]
+
+solana_addresses = [
+  "replace_with_primary_solana_receive_address",
+]
+
+# Optional. Add each separate stake-account address if you hold delegated SOL.
+# Do not repeat a primary address here.
+solana_stake_accounts = []
+
+[providers]
+# Public endpoints are convenient but receive your public account identifiers.
+# Replace these URLs with private/self-hosted providers for stronger privacy or
+# operational guarantees.
+bitcoin_blockbook_url = "https://btc1.trezor.io"
+ethereum_rpc_url = "https://ethereum-rpc.publicnode.com"
+solana_rpc_url = "https://api.mainnet-beta.solana.com"
+coingecko_url = "https://api.coingecko.com/api/v3"
+
+# Official Ethereum-mainnet LINK contract. Change only if you deliberately
+# track LINK on another supported network and update the provider accordingly.
+link_contract = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
+
+[policy]
+target_btc = 0.50
+target_eth = 0.25
+target_sol = 0.15
+target_link = 0.10
+
+# Rebalance when any current asset weight is this many percentage points away
+# from target. 0.05 means a 5-percentage-point band.
+threshold = 0.05
+
+# Estimated execution cost on every dollar bought or sold. This only improves
+# planning arithmetic; it is not an exchange or network fee quote.
+estimated_fee_bps = 0
+include_unconfirmed_bitcoin = false
+max_price_age_seconds = 900

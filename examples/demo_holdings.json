@@ -1,0 +1,10 @@
+{
+  "amounts": {
+    "BTC": "0.08",
+    "ETH": "1.8",
+    "SOL": "30",
+    "LINK": "250"
+  },
+  "pending_bitcoin": "0",
+  "fetched_at": "2026-07-28T12:00:00Z"
+}

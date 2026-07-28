@@ -1,0 +1,17 @@
+[Unit]
+Description=Hardware wallet rebalancer Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/hardware_wallet_rebalancer
+EnvironmentFile=%h/Projects/hardware_wallet_rebalancer/.env
+ExecStart=%h/Projects/hardware_wallet_rebalancer/.venv/bin/python -m wallet_rebalancer bot
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

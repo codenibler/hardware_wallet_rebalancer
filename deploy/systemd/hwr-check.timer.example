@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly hardware wallet rebalance report
+
+[Timer]
+OnCalendar=Sun *-*-* 20:00:00
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

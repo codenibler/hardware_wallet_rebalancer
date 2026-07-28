@@ -1,0 +1,10 @@
+{
+  "prices_usd": {
+    "BTC": "63724.90",
+    "ETH": "1890.61",
+    "SOL": "74.14",
+    "LINK": "8.36"
+  },
+  "as_of": "2026-07-28T12:00:00Z",
+  "source": "Deterministic demo snapshot"
+}
