@@ -35,7 +35,7 @@ def _non_negative_decimal(value: str) -> Decimal:
 def _prompt_top_up() -> Decimal:
     while True:
         print(
-            "Enter new USD top-up amount [0]: ",
+            "Enter new EUR top-up amount [0]: ",
             end="",
             file=sys.stderr,
             flush=True,
@@ -88,16 +88,16 @@ def _load_price_snapshot(path: Path) -> PriceBook:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("Price snapshot must be a JSON object")
-    prices = raw.get("prices_usd", raw)
+    prices = raw.get("prices_eur", raw)
     if not isinstance(prices, dict):
-        raise ValueError("Price snapshot prices_usd must be an object")
+        raise ValueError("Price snapshot prices_eur must be an object")
     as_of = (
         _parse_datetime(raw["as_of"], "as_of")
         if "as_of" in raw
         else datetime.now(timezone.utc)
     )
     return PriceBook(
-        prices_usd=prices,
+        prices_eur=prices,
         as_of=as_of,
         source=str(raw.get("source", f"Local file {path.name}")),
     )
@@ -138,7 +138,7 @@ def _plan_from_args(
     return build_plan(
         holdings,
         prices,
-        top_up_usd=top_up,
+        top_up_eur=top_up,
         threshold=threshold,
         estimated_fee_bps=fee_bps,
         target_weights=config.policy.target_weights,
@@ -154,7 +154,7 @@ def _add_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--fee-bps",
         type=_non_negative_decimal,
-        help="Override estimated fee bps on every dollar bought or sold",
+        help="Override estimated fee bps on every euro bought or sold",
     )
 
 

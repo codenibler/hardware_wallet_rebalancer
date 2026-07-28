@@ -34,8 +34,10 @@ class FakeSession:
         self.headers = {}
         self.gets = list(gets or [])
         self.posts = list(posts or [])
+        self.get_calls = []
 
     def get(self, *args, **kwargs):
+        self.get_calls.append((args, kwargs))
         return self.gets.pop(0)
 
     def post(self, *args, **kwargs):
@@ -100,15 +102,19 @@ class ProviderTests(unittest.TestCase):
     def test_price_response_and_timestamp_are_validated(self) -> None:
         now = int(datetime.now(timezone.utc).timestamp())
         payload = {
-            "bitcoin": {"usd": 60000, "last_updated_at": now},
-            "ethereum": {"usd": 2000, "last_updated_at": now},
-            "solana": {"usd": 100, "last_updated_at": now},
-            "chainlink": {"usd": 10, "last_updated_at": now},
+            "bitcoin": {"eur": 60000, "last_updated_at": now},
+            "ethereum": {"eur": 2000, "last_updated_at": now},
+            "solana": {"eur": 100, "last_updated_at": now},
+            "chainlink": {"eur": 10, "last_updated_at": now},
         }
         session = FakeSession(gets=[FakeResponse(payload)])
         prices = PublicDataClient(config(), session=session).fetch_prices()
 
         self.assertEqual(prices.normalized()["BTC"], Decimal("60000"))
+        self.assertEqual(
+            session.get_calls[0][1]["params"]["vs_currencies"],
+            "eur",
+        )
 
     def test_provider_error_does_not_leak_xpub(self) -> None:
         session = FakeSession(gets=[FakeResponse({}, status_code=500)])

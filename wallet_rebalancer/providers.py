@@ -275,7 +275,7 @@ class PublicDataClient:
                 f"{self.config.providers.coingecko_url}/simple/price",
                 params={
                     "ids": ids,
-                    "vs_currencies": "usd",
+                    "vs_currencies": "eur",
                     "include_last_updated_at": "true",
                     "precision": "full",
                 },
@@ -296,7 +296,7 @@ class PublicDataClient:
             quote_data = data.get(coin_id)
             if not isinstance(quote_data, dict):
                 raise ProviderError(f"CoinGecko omitted {asset}")
-            price = _decimal(quote_data.get("usd"), f"CoinGecko {asset}")
+            price = _decimal(quote_data.get("eur"), f"CoinGecko {asset}")
             if price <= ZERO:
                 raise ProviderError(f"CoinGecko returned a non-positive {asset} price")
             timestamp = quote_data.get("last_updated_at")
@@ -315,7 +315,7 @@ class PublicDataClient:
                 "no trade plan generated"
             )
         return PriceBook(
-            prices_usd=prices,
+            prices_eur=prices,
             as_of=as_of,
-            source="CoinGecko simple/price",
+            source="CoinGecko EUR simple/price",
         )

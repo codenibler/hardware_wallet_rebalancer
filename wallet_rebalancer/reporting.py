@@ -13,7 +13,7 @@ AMOUNT_DECIMALS = {"BTC": 8, "ETH": 8, "SOL": 8, "LINK": 6}
 
 
 def _money(value: Decimal) -> str:
-    return f"${value:,.2f}"
+    return f"€{value:,.2f}"
 
 
 def _percent(value: Decimal, *, signed: bool = False) -> str:
@@ -60,13 +60,13 @@ def render_text(plan: PortfolioPlan) -> str:
         "",
         f"Holdings fetched: {_utc(plan.holdings_as_of)}",
         f"Prices as of:     {_utc(plan.prices_as_of)} ({plan.price_source})",
-        f"Current value:    {_money(plan.current_total_usd)}",
-        f"Top-up capital:   {_money(plan.top_up_usd)}",
-        f"Post-fee target:  {_money(plan.desired_invested_total_usd)}",
-        f"Estimated fees:   {_money(plan.estimated_fees_usd)}",
+        f"Current value:    {_money(plan.current_total_eur)}",
+        f"Top-up capital:   {_money(plan.top_up_eur)}",
+        f"Post-fee target:  {_money(plan.desired_invested_total_eur)}",
+        f"Estimated fees:   {_money(plan.estimated_fees_eur)}",
         "",
         "CURRENT AND DESIRED HOLDINGS",
-        "Asset | Units now | USD now | Weight | Target | Desired units | Desired USD",
+        "Asset | Units now | EUR now | Weight | Target | Desired units | Desired EUR",
     ]
     for asset in plan.assets:
         lines.append(
@@ -74,11 +74,11 @@ def render_text(plan: PortfolioPlan) -> str:
                 [
                     asset.asset,
                     _amount(asset.asset, asset.amount),
-                    _money(asset.current_value_usd),
+                    _money(asset.current_value_eur),
                     _percent(asset.current_weight),
                     _percent(asset.target_weight),
                     _amount(asset.asset, asset.desired_amount),
-                    _money(asset.desired_value_usd),
+                    _money(asset.desired_value_eur),
                 ]
             )
         )
@@ -92,13 +92,13 @@ def render_text(plan: PortfolioPlan) -> str:
                 lines.append(
                     f"{trade.side:4} {_amount(trade.asset, trade.amount)} "
                     f"{trade.asset} for approximately "
-                    f"{_money(trade.notional_usd)} at "
-                    f"{_money(trade.snapshot_price_usd)}/{trade.asset}"
+                    f"{_money(trade.notional_eur)} at "
+                    f"{_money(trade.snapshot_price_eur)}/{trade.asset}"
                 )
 
         buys = sum(
             (
-                trade.notional_usd
+                trade.notional_eur
                 for trade in plan.trades
                 if trade.side == "BUY"
             ),
@@ -106,7 +106,7 @@ def render_text(plan: PortfolioPlan) -> str:
         )
         sells = sum(
             (
-                trade.notional_usd
+                trade.notional_eur
                 for trade in plan.trades
                 if trade.side == "SELL"
             ),
@@ -119,14 +119,14 @@ def render_text(plan: PortfolioPlan) -> str:
                 f"Gross sells: {_money(sells)}",
                 (
                     "Cash check: gross buys - gross sells + estimated fees "
-                    f"= {_money(buys - sells + plan.estimated_fees_usd)}"
+                    f"= {_money(buys - sells + plan.estimated_fees_eur)}"
                 ),
             ]
         )
-        if sells > ZERO and plan.top_up_usd > ZERO:
+        if sells > ZERO and plan.top_up_eur > ZERO:
             lines.append(
                 "A buy-only exact rebalance would require a top-up of at least "
-                f"{_money(plan.minimum_top_up_for_buy_only_usd)} at this snapshot."
+                f"{_money(plan.minimum_top_up_for_buy_only_eur)} at this snapshot."
             )
 
     if plan.pending_bitcoin != ZERO:
@@ -151,14 +151,14 @@ def plan_to_dict(plan: PortfolioPlan) -> dict[str, Any]:
     for row in plan.assets:
         assets[row.asset] = {
             "amount": str(row.amount),
-            "price_usd": str(row.price_usd),
-            "current_value_usd": str(row.current_value_usd),
+            "price_eur": str(row.price_eur),
+            "current_value_eur": str(row.current_value_eur),
             "current_weight": str(row.current_weight),
             "target_weight": str(row.target_weight),
             "drift": str(row.drift),
             "desired_amount": str(row.desired_amount),
-            "desired_value_usd": str(row.desired_value_usd),
-            "trade_value_usd": str(row.trade_value_usd),
+            "desired_value_eur": str(row.desired_value_eur),
+            "trade_value_eur": str(row.trade_value_eur),
         }
     return {
         "status": (
@@ -169,12 +169,12 @@ def plan_to_dict(plan: PortfolioPlan) -> dict[str, Any]:
         "top_up_plan_included": plan.has_top_up,
         "threshold": str(plan.threshold),
         "max_abs_drift": str(plan.max_abs_drift),
-        "current_total_usd": str(plan.current_total_usd),
-        "top_up_usd": str(plan.top_up_usd),
-        "estimated_fees_usd": str(plan.estimated_fees_usd),
-        "desired_invested_total_usd": str(plan.desired_invested_total_usd),
-        "minimum_top_up_for_buy_only_usd": str(
-            plan.minimum_top_up_for_buy_only_usd
+        "current_total_eur": str(plan.current_total_eur),
+        "top_up_eur": str(plan.top_up_eur),
+        "estimated_fees_eur": str(plan.estimated_fees_eur),
+        "desired_invested_total_eur": str(plan.desired_invested_total_eur),
+        "minimum_top_up_for_buy_only_eur": str(
+            plan.minimum_top_up_for_buy_only_eur
         ),
         "holdings_as_of": _utc(plan.holdings_as_of),
         "prices_as_of": _utc(plan.prices_as_of),
@@ -186,8 +186,8 @@ def plan_to_dict(plan: PortfolioPlan) -> dict[str, Any]:
                 "side": trade.side,
                 "asset": trade.asset,
                 "amount": str(trade.amount),
-                "notional_usd": str(trade.notional_usd),
-                "snapshot_price_usd": str(trade.snapshot_price_usd),
+                "notional_eur": str(trade.notional_eur),
+                "snapshot_price_eur": str(trade.snapshot_price_eur),
             }
             for trade in plan.trades
         ],

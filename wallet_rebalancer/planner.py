@@ -19,12 +19,12 @@ from .models import (
 def _solve_fee_adjusted_target(
     current_values: Mapping[str, Decimal],
     targets: Mapping[str, Decimal],
-    top_up_usd: Decimal,
+    top_up_eur: Decimal,
     fee_rate: Decimal,
 ) -> tuple[Decimal, dict[str, Decimal], Decimal]:
-    """Solve final NAV = current NAV + cash - fees on gross traded dollars."""
+    """Solve final NAV = current NAV + cash - fees on gross traded euros."""
 
-    pre_trade_total = sum(current_values.values(), ZERO) + top_up_usd
+    pre_trade_total = sum(current_values.values(), ZERO) + top_up_eur
     post_trade_total = pre_trade_total
     for _ in range(200):
         deltas = {
@@ -54,7 +54,7 @@ def build_plan(
     holdings: Holdings,
     price_book: PriceBook,
     *,
-    top_up_usd: Decimal | str | int | float = ZERO,
+    top_up_eur: Decimal | str | int | float = ZERO,
     threshold: Decimal | str | float = Decimal("0.05"),
     estimated_fee_bps: Decimal | str | float = ZERO,
     target_weights: Mapping[str, Decimal] | None = None,
@@ -76,7 +76,7 @@ def build_plan(
     ) != Decimal("1"):
         raise ValueError("Target weights must be positive and sum to 1")
 
-    top_up = Decimal(str(top_up_usd))
+    top_up = Decimal(str(top_up_eur))
     threshold_value = Decimal(str(threshold))
     fee_bps = Decimal(str(estimated_fee_bps))
     numeric_inputs = [top_up, threshold_value, fee_bps, *targets.values()]
@@ -140,14 +140,14 @@ def build_plan(
             AssetPlan(
                 asset=asset,
                 amount=amounts[asset],
-                price_usd=prices[asset],
-                current_value_usd=current_values[asset],
+                price_eur=prices[asset],
+                current_value_eur=current_values[asset],
                 current_weight=current_weights[asset],
                 target_weight=targets[asset],
                 drift=drifts[asset],
-                desired_value_usd=desired_value,
+                desired_value_eur=desired_value,
                 desired_amount=desired_amount,
-                trade_value_usd=trade_value,
+                trade_value_eur=trade_value,
             )
         )
         if trade_value != ZERO:
@@ -156,8 +156,8 @@ def build_plan(
                     asset=asset,
                     side="BUY" if trade_value > ZERO else "SELL",
                     amount=abs(trade_value) / prices[asset],
-                    notional_usd=abs(trade_value),
-                    snapshot_price_usd=prices[asset],
+                    notional_eur=abs(trade_value),
+                    snapshot_price_eur=prices[asset],
                 )
             )
 
@@ -165,14 +165,14 @@ def build_plan(
     return PortfolioPlan(
         assets=tuple(asset_rows),
         trades=tuple(trades),
-        current_total_usd=current_total,
-        top_up_usd=top_up,
-        estimated_fees_usd=estimated_fees,
-        desired_invested_total_usd=desired_total,
+        current_total_eur=current_total,
+        top_up_eur=top_up,
+        estimated_fees_eur=estimated_fees,
+        desired_invested_total_eur=desired_total,
         threshold=threshold_value,
         max_abs_drift=max_abs_drift,
         threshold_rebalance_needed=threshold_needed,
-        minimum_top_up_for_buy_only_usd=minimum_top_up_for_buy_only,
+        minimum_top_up_for_buy_only_eur=minimum_top_up_for_buy_only,
         prices_as_of=price_book.as_of,
         holdings_as_of=holdings.fetched_at,
         price_source=price_book.source,

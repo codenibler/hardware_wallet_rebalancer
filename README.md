@@ -7,7 +7,7 @@ A read-only Trezor portfolio monitor and transaction planner for:
 - 15% SOL
 - 10% LINK
 
-The program reads public blockchain balances, obtains current USD prices, and
+The program reads public blockchain balances, obtains current EUR prices, and
 checks whether any asset is outside a configurable allocation band. It never
 asks the Trezor to sign, never broadcasts transactions, and must never receive
 a recovery seed, PIN, passphrase, or private key.
@@ -23,7 +23,7 @@ a recovery seed, PIN, passphrase, or private key.
 - Native SOL lookup for multiple primary and explicitly listed stake accounts.
 - 5-percentage-point maximum drift threshold by default.
 - Fee-aware indicative buy/sell calculations.
-- Interactive top-up input for new USD capital.
+- Interactive top-up input for new EUR capital.
 - Human-readable and JSON output.
 - Default visual Telegram delivery and an allowlisted `/check [top_up]` bot.
 - Deterministic offline demo and unit tests.
@@ -50,7 +50,7 @@ python run_rebalancer.py --json
 Each check asks:
 
 ```text
-Enter new USD top-up amount [0]:
+Enter new EUR top-up amount [0]:
 ```
 
 Enter the new amount, or press Enter to use zero. For unattended runs, pass
@@ -60,14 +60,14 @@ Every successful check sends a visual action card to `TELEGRAM_CHAT_ID` by
 default. Buys appear in green, sells in red, and the report orders sells before
 buys. Use `--no-telegram` only for offline demos or local troubleshooting.
 
-The top-up is uninvested USD cash that is not already included in the fetched
+The top-up is uninvested EUR cash that is not already included in the fetched
 wallet balances. The planner:
 
 1. values the current holdings;
 2. adds the top-up;
 3. estimates costs on gross buys and sells;
 4. solves the post-fee target portfolio;
-5. reports asset units and USD notionals at the same price snapshot.
+5. reports asset units and EUR notionals at the same price snapshot.
 
 If no threshold is breached and no top-up is supplied, it states that no
 rebalance is needed. If the allocation is within its band but a top-up is

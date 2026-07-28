@@ -3,7 +3,7 @@
 ## What this program can do
 
 - Query public blockchain/indexer/RPC endpoints.
-- Query public USD prices.
+- Query public EUR prices.
 - Calculate an indicative target allocation.
 - Print or send the resulting report to an allowlisted Telegram chat.
 

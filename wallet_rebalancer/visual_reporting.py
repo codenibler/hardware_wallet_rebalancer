@@ -49,7 +49,7 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 
 def _money(value: Decimal) -> str:
-    return f"${value:,.2f}"
+    return f"€{value:,.2f}"
 
 
 def _percent(value: Decimal) -> str:
@@ -139,14 +139,14 @@ def _trade_card(
     _text(
         draw,
         (MARGIN + 205, y + 91),
-        f"Snapshot price  {_money(trade.snapshot_price_usd)} / {trade.asset}",
+        f"Snapshot price  {_money(trade.snapshot_price_eur)} / {trade.asset}",
         size=24,
         color=MUTED,
     )
     _text(
         draw,
         (WIDTH - MARGIN - 28, y + 61),
-        _money(trade.notional_usd),
+        _money(trade.notional_eur),
         size=38,
         color=color,
         bold=True,
@@ -176,7 +176,7 @@ def render_action_image(plan: PortfolioPlan) -> bytes:
     _text(
         draw,
         (MARGIN, 125),
-        "BTC 50%  •  ETH 25%  •  SOL 15%  •  LINK 10%",
+        "BTC 50%  •  ETH 25%  •  SOL 15%  •  LINK 10%  •  EUR BASE",
         size=25,
         color=MUTED,
     )
@@ -193,9 +193,9 @@ def render_action_image(plan: PortfolioPlan) -> bytes:
         fill=SURFACE,
     )
     metrics = (
-        ("CURRENT VALUE", _money(plan.current_total_usd)),
-        ("NEW CAPITAL", _money(plan.top_up_usd)),
-        ("EST. FEES", _money(plan.estimated_fees_usd)),
+        ("CURRENT VALUE", _money(plan.current_total_eur)),
+        ("NEW CAPITAL", _money(plan.top_up_eur)),
+        ("EST. FEES", _money(plan.estimated_fees_eur)),
     )
     metric_width = (WIDTH - 2 * MARGIN) // 3
     for index, (label, value) in enumerate(metrics):
@@ -220,7 +220,7 @@ def render_action_image(plan: PortfolioPlan) -> bytes:
         _text(
             draw,
             (x + 30, 493),
-            f"{_percent(asset.current_weight)}  →  "
+            f"{_percent(asset.current_weight)}  >  "
             f"{_percent(asset.target_weight)}",
             size=25,
             color=ACCENT,

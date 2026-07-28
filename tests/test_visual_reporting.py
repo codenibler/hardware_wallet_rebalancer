@@ -20,7 +20,7 @@ from wallet_rebalancer.visual_reporting import (
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
 PRICES = PriceBook(
-    prices_usd={"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1},
+    prices_eur={"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1},
     as_of=NOW,
     source="test",
 )

@@ -144,7 +144,7 @@ def run_bot(
     allowed_chat_ids: set[int],
     check_callback: Callable[[Decimal], bytes],
 ) -> None:
-    """Long-poll for /check [USD] from explicitly allowlisted chats."""
+    """Long-poll for /check [EUR] from explicitly allowlisted chats."""
 
     if not allowed_chat_ids:
         raise ValueError("Bot mode requires TELEGRAM_ALLOWED_CHAT_IDS")
@@ -184,13 +184,13 @@ def run_bot(
                 client.send_message(
                     chat_id,
                     "Commands:\n/check\n/check 1000\n\n"
-                    "The optional number is new USD top-up capital.",
+                    "The optional number is new EUR top-up capital.",
                 )
                 continue
             if command != "/check":
                 continue
             if len(parts) > 2:
-                client.send_message(chat_id, "Usage: /check [top_up_usd]")
+                client.send_message(chat_id, "Usage: /check [top_up_eur]")
                 continue
             try:
                 top_up = Decimal(parts[1]) if len(parts) == 2 else Decimal("0")

@@ -143,7 +143,7 @@ python run_rebalancer.py --json
 python run_rebalancer.py
 ```
 
-Both commands ask for the new USD top-up amount. Press Enter to use zero.
+Both commands ask for the new EUR top-up amount. Press Enter to use zero.
 
 Before acting, compare every fetched asset amount with Trezor Suite. Resolve
 any discrepancy first—usually it means a missing account, passphrase wallet,
@@ -167,7 +167,7 @@ and red SELL cards:
 python run_rebalancer.py
 ```
 
-Enter the new USD top-up amount when prompted. Use `--no-telegram` only when
+Enter the new EUR top-up amount when prompted. Use `--no-telegram` only when
 you deliberately want local output without a notification.
 
 Interactive bot:

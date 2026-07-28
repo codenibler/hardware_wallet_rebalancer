@@ -11,7 +11,7 @@ from wallet_rebalancer.reporting import plan_to_dict, render_text
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
 UNIT_PRICES = PriceBook(
-    prices_usd={"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1},
+    prices_eur={"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1},
     as_of=NOW,
     source="test",
 )
@@ -32,6 +32,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(plan.max_abs_drift, Decimal("0"))
         report = render_text(plan)
         self.assertIn("STATUS: NO REBALANCE NEEDED", report)
+        self.assertIn("€1,000.00", report)
         self.assertNotIn("SAFETY", report)
         self.assertNotIn("read-only plan", report)
 
@@ -47,10 +48,10 @@ class PlannerTests(unittest.TestCase):
 
         self.assertTrue(plan.threshold_rebalance_needed)
         trades = {(trade.side, trade.asset): trade for trade in plan.trades}
-        self.assertEqual(trades[("SELL", "BTC")].notional_usd, Decimal("300.00"))
-        self.assertEqual(trades[("BUY", "ETH")].notional_usd, Decimal("150.00"))
-        self.assertEqual(trades[("BUY", "SOL")].notional_usd, Decimal("100.00"))
-        self.assertEqual(trades[("BUY", "LINK")].notional_usd, Decimal("50.00"))
+        self.assertEqual(trades[("SELL", "BTC")].notional_eur, Decimal("300.00"))
+        self.assertEqual(trades[("BUY", "ETH")].notional_eur, Decimal("150.00"))
+        self.assertEqual(trades[("BUY", "SOL")].notional_eur, Decimal("100.00"))
+        self.assertEqual(trades[("BUY", "LINK")].notional_eur, Decimal("50.00"))
 
     def test_balanced_top_up_is_allocated_by_target(self) -> None:
         plan = build_plan(
@@ -59,13 +60,13 @@ class PlannerTests(unittest.TestCase):
                 fetched_at=NOW,
             ),
             UNIT_PRICES,
-            top_up_usd="100",
+            top_up_eur="100",
         )
 
         self.assertFalse(plan.threshold_rebalance_needed)
         self.assertTrue(plan.has_trade_plan)
         trade_values = {
-            trade.asset: trade.notional_usd for trade in plan.trades
+            trade.asset: trade.notional_eur for trade in plan.trades
         }
         self.assertEqual(
             trade_values,
@@ -85,11 +86,11 @@ class PlannerTests(unittest.TestCase):
                 fetched_at=NOW,
             ),
             UNIT_PRICES,
-            top_up_usd="100",
+            top_up_eur="100",
         )
 
         self.assertEqual(
-            plan.minimum_top_up_for_buy_only_usd,
+            plan.minimum_top_up_for_buy_only_eur,
             Decimal("200"),
         )
         self.assertTrue(any(trade.side == "SELL" for trade in plan.trades))
@@ -105,7 +106,7 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            plan.minimum_top_up_for_buy_only_usd,
+            plan.minimum_top_up_for_buy_only_eur,
             Decimal("202.00"),
         )
 
@@ -116,26 +117,26 @@ class PlannerTests(unittest.TestCase):
                 fetched_at=NOW,
             ),
             UNIT_PRICES,
-            top_up_usd="100",
+            top_up_eur="100",
             estimated_fee_bps="50",
         )
         buys = sum(
-            (trade.notional_usd for trade in plan.trades if trade.side == "BUY"),
+            (trade.notional_eur for trade in plan.trades if trade.side == "BUY"),
             Decimal("0"),
         )
         sells = sum(
-            (trade.notional_usd for trade in plan.trades if trade.side == "SELL"),
+            (trade.notional_eur for trade in plan.trades if trade.side == "SELL"),
             Decimal("0"),
         )
 
         self.assertAlmostEqual(
-            buys - sells + plan.estimated_fees_usd,
+            buys - sells + plan.estimated_fees_eur,
             Decimal("100"),
             places=7,
         )
         self.assertAlmostEqual(
-            plan.desired_invested_total_usd,
-            Decimal("1100") - plan.estimated_fees_usd,
+            plan.desired_invested_total_eur,
+            Decimal("1100") - plan.estimated_fees_eur,
             places=7,
         )
 
@@ -146,7 +147,7 @@ class PlannerTests(unittest.TestCase):
                 fetched_at=NOW,
             ),
             PriceBook(
-                prices_usd={
+                prices_eur={
                     "BTC": "65000.123456",
                     "ETH": "2000.12",
                     "SOL": "80.1",
@@ -159,6 +160,8 @@ class PlannerTests(unittest.TestCase):
         payload = plan_to_dict(plan)
         self.assertIsInstance(payload["assets"]["BTC"]["amount"], str)
         self.assertEqual(payload["assets"]["BTC"]["amount"], "0.1")
+        self.assertIn("price_eur", payload["assets"]["BTC"])
+        self.assertNotIn("price_usd", payload["assets"]["BTC"])
 
 
 if __name__ == "__main__":

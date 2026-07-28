@@ -60,12 +60,12 @@ class Holdings:
 
 @dataclass(frozen=True)
 class PriceBook:
-    prices_usd: Mapping[str, Decimal | str | int | float]
+    prices_eur: Mapping[str, Decimal | str | int | float]
     as_of: datetime
     source: str = "CoinGecko"
 
     def normalized(self) -> dict[str, Decimal]:
-        prices = decimal_map(self.prices_usd)
+        prices = decimal_map(self.prices_eur)
         if any(value <= ZERO for value in prices.values()):
             raise ValueError("All prices must be strictly positive")
         return prices
@@ -76,36 +76,36 @@ class TradeInstruction:
     asset: str
     side: str
     amount: Decimal
-    notional_usd: Decimal
-    snapshot_price_usd: Decimal
+    notional_eur: Decimal
+    snapshot_price_eur: Decimal
 
 
 @dataclass(frozen=True)
 class AssetPlan:
     asset: str
     amount: Decimal
-    price_usd: Decimal
-    current_value_usd: Decimal
+    price_eur: Decimal
+    current_value_eur: Decimal
     current_weight: Decimal
     target_weight: Decimal
     drift: Decimal
-    desired_value_usd: Decimal
+    desired_value_eur: Decimal
     desired_amount: Decimal
-    trade_value_usd: Decimal
+    trade_value_eur: Decimal
 
 
 @dataclass(frozen=True)
 class PortfolioPlan:
     assets: tuple[AssetPlan, ...]
     trades: tuple[TradeInstruction, ...]
-    current_total_usd: Decimal
-    top_up_usd: Decimal
-    estimated_fees_usd: Decimal
-    desired_invested_total_usd: Decimal
+    current_total_eur: Decimal
+    top_up_eur: Decimal
+    estimated_fees_eur: Decimal
+    desired_invested_total_eur: Decimal
     threshold: Decimal
     max_abs_drift: Decimal
     threshold_rebalance_needed: bool
-    minimum_top_up_for_buy_only_usd: Decimal
+    minimum_top_up_for_buy_only_eur: Decimal
     prices_as_of: datetime
     holdings_as_of: datetime
     price_source: str
@@ -113,7 +113,7 @@ class PortfolioPlan:
 
     @property
     def has_top_up(self) -> bool:
-        return self.top_up_usd > ZERO
+        return self.top_up_eur > ZERO
 
     @property
     def has_trade_plan(self) -> bool:
