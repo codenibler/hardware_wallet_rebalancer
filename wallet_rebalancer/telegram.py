@@ -66,6 +66,31 @@ class TelegramClient:
                 payload={"chat_id": chat_id, "text": chunk},
             )
 
+    def send_photo(
+        self,
+        chat_id: int | str,
+        image: bytes,
+        *,
+        filename: str = "rebalance-actions.png",
+    ) -> None:
+        """Upload one PNG action report without a plain-text caption."""
+
+        try:
+            response = self._session.post(
+                f"{self._base_url}/sendPhoto",
+                data={"chat_id": str(chat_id)},
+                files={"photo": (filename, image, "image/png")},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise TelegramError(
+                "Telegram sendPhoto failed; token omitted"
+            ) from exc
+        if not isinstance(body, dict) or not body.get("ok"):
+            raise TelegramError("Telegram sendPhoto returned an API error")
+
     def get_updates(
         self,
         *,
@@ -117,7 +142,7 @@ def run_bot(
     client: TelegramClient,
     *,
     allowed_chat_ids: set[int],
-    check_callback: Callable[[Decimal], str],
+    check_callback: Callable[[Decimal], bytes],
 ) -> None:
     """Long-poll for /check [USD] from explicitly allowlisted chats."""
 
@@ -159,8 +184,7 @@ def run_bot(
                 client.send_message(
                     chat_id,
                     "Commands:\n/check\n/check 1000\n\n"
-                    "The optional number is new USD top-up capital. "
-                    "The bot is read-only and never signs transactions.",
+                    "The optional number is new USD top-up capital.",
                 )
                 continue
             if command != "/check":
@@ -179,8 +203,8 @@ def run_bot(
                 )
                 continue
             try:
-                report = check_callback(top_up)
+                report_image = check_callback(top_up)
             except Exception as exc:  # sanitized domain errors are user-facing
                 client.send_message(chat_id, f"Check failed: {exc}")
                 continue
-            client.send_message(chat_id, report)
+            client.send_photo(chat_id, report_image)

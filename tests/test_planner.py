@@ -30,7 +30,10 @@ class PlannerTests(unittest.TestCase):
         self.assertFalse(plan.threshold_rebalance_needed)
         self.assertFalse(plan.has_trade_plan)
         self.assertEqual(plan.max_abs_drift, Decimal("0"))
-        self.assertIn("STATUS: NO REBALANCE NEEDED", render_text(plan))
+        report = render_text(plan)
+        self.assertIn("STATUS: NO REBALANCE NEEDED", report)
+        self.assertNotIn("SAFETY", report)
+        self.assertNotIn("read-only plan", report)
 
     def test_unbalanced_portfolio_produces_exact_buys_and_sells(self) -> None:
         plan = build_plan(

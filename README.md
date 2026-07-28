@@ -25,7 +25,7 @@ a recovery seed, PIN, passphrase, or private key.
 - Fee-aware indicative buy/sell calculations.
 - Interactive top-up input for new USD capital.
 - Human-readable and JSON output.
-- Default Telegram delivery and an allowlisted `/check [top_up]` bot.
+- Default visual Telegram delivery and an allowlisted `/check [top_up]` bot.
 - Deterministic offline demo and unit tests.
 
 No automatic trade execution is included by design.
@@ -56,8 +56,9 @@ Enter new USD top-up amount [0]:
 Enter the new amount, or press Enter to use zero. For unattended runs, pass
 `--no-prompt`; this explicitly uses a zero top-up.
 
-Every successful check sends its text report to `TELEGRAM_CHAT_ID` by default.
-Use `--no-telegram` only for offline demos or local troubleshooting.
+Every successful check sends a visual action card to `TELEGRAM_CHAT_ID` by
+default. Buys appear in green, sells in red, and the report orders sells before
+buys. Use `--no-telegram` only for offline demos or local troubleshooting.
 
 The top-up is uninvested USD cash that is not already included in the fetched
 wallet balances. The planner:

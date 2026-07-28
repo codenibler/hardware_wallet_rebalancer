@@ -19,6 +19,7 @@ from .planner import build_plan
 from .providers import ProviderError, PublicDataClient
 from .reporting import render_json, render_text
 from .telegram import TelegramClient, discover_chats, run_bot
+from .visual_reporting import render_action_image
 
 
 def _non_negative_decimal(value: str) -> Decimal:
@@ -230,7 +231,7 @@ def _check_command(args: argparse.Namespace) -> int:
     if not args.no_telegram:
         token = _require_env("TELEGRAM_BOT_TOKEN")
         chat_id = _require_env("TELEGRAM_CHAT_ID")
-        TelegramClient(token).send_message(chat_id, text_report)
+        TelegramClient(token).send_photo(chat_id, render_action_image(plan))
     return 0
 
 
@@ -266,8 +267,8 @@ def _bot_command(args: argparse.Namespace) -> int:
             "TELEGRAM_ALLOWED_CHAT_IDS must contain numeric IDs"
         ) from exc
 
-    def check_callback(top_up: Decimal) -> str:
-        return render_text(
+    def check_callback(top_up: Decimal) -> bytes:
+        return render_action_image(
             _plan_from_args(args, config, top_up_override=top_up)
         )
 

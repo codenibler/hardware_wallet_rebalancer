@@ -80,16 +80,21 @@ class TelegramDeliveryTests(unittest.TestCase):
                 "wallet_rebalancer.cli.render_text",
                 return_value="test report",
             ),
+            patch(
+                "wallet_rebalancer.cli.render_action_image",
+                return_value=b"png-image",
+            ),
             patch("wallet_rebalancer.cli.TelegramClient") as client_class,
             patch("sys.stdout", new_callable=io.StringIO),
         ):
             self.assertEqual(_check_command(args), 0)
 
         client_class.assert_called_once_with("test-token:secret")
-        client_class.return_value.send_message.assert_called_once_with(
+        client_class.return_value.send_photo.assert_called_once_with(
             "123456",
-            "test report",
+            b"png-image",
         )
+        client_class.return_value.send_message.assert_not_called()
 
     def test_no_telegram_skips_delivery(self) -> None:
         args = build_parser().parse_args(

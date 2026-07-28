@@ -141,18 +141,6 @@ def render_text(plan: PortfolioPlan) -> str:
             ]
         )
 
-    lines.extend(
-        [
-            "",
-            "SAFETY",
-            (
-                "This is a read-only plan, not a signed or broadcast transaction. "
-                "Amounts use one price snapshot. Recheck prices, venue fees, spread, "
-                "tax impact, network/gas costs, and every destination on the Trezor "
-                "screen before executing."
-            ),
-        ]
-    )
     return "\n".join(lines)
 
 
