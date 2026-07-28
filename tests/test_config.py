@@ -1,81 +1,78 @@
 from __future__ import annotations
 
-import tempfile
+import os
 import unittest
-from pathlib import Path
+from unittest.mock import patch
 
 from wallet_rebalancer.config import load_config
 
 
-VALID_CONFIG = """
-[wallet]
-bitcoin_xpubs = ["xpubTestPublicAccount"]
-ethereum_addresses = ["0x1111111111111111111111111111111111111111"]
-solana_addresses = ["11111111111111111111111111111111"]
-solana_stake_accounts = []
-
-[providers]
-bitcoin_blockbook_url = "https://btc1.trezor.io"
-ethereum_rpc_url = "https://ethereum-rpc.publicnode.com"
-solana_rpc_url = "https://api.mainnet-beta.solana.com"
-coingecko_url = "https://api.coingecko.com/api/v3"
-link_contract = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
-
-[policy]
-target_btc = 0.50
-target_eth = 0.25
-target_sol = 0.15
-target_link = 0.10
-threshold = 0.05
-"""
+VALID_ENV = {
+    "HWR_BITCOIN_XPUBS": "xpubTestPublicAccount",
+    "HWR_ETHEREUM_ADDRESSES": "0x1111111111111111111111111111111111111111",
+    "HWR_SOLANA_ADDRESSES": "11111111111111111111111111111111",
+    "HWR_SOLANA_STAKE_ACCOUNTS": "",
+}
 
 
 class ConfigTests(unittest.TestCase):
-    def write_config(self, text: str) -> Path:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        path = Path(directory.name) / "config.toml"
-        path.write_text(text, encoding="utf-8")
-        return path
+    def load_with_env(self, **overrides: str):
+        environment = {**VALID_ENV, **overrides}
+        with patch.dict(os.environ, environment, clear=True):
+            return load_config()
 
-    def test_valid_config_loads(self) -> None:
-        config = load_config(self.write_config(VALID_CONFIG))
+    def test_valid_environment_loads(self) -> None:
+        config = self.load_with_env()
 
         self.assertEqual(len(config.wallet.bitcoin_xpubs), 1)
         self.assertEqual(str(config.policy.threshold), "0.05")
         self.assertEqual(sum(config.policy.target_weights.values()), 1)
 
-    def test_placeholder_is_rejected(self) -> None:
-        invalid = VALID_CONFIG.replace(
-            "xpubTestPublicAccount",
-            "replace_with_bitcoin_account_xpub",
+    def test_comma_separated_wallet_identifiers_load(self) -> None:
+        config = self.load_with_env(
+            HWR_BITCOIN_XPUBS="xpubFirst,xpubSecond",
+            HWR_ETHEREUM_ADDRESSES=(
+                "0x1111111111111111111111111111111111111111,"
+                "0x2222222222222222222222222222222222222222"
+            ),
         )
-        with self.assertRaisesRegex(ValueError, "placeholder"):
-            load_config(self.write_config(invalid))
 
-    def test_unknown_setting_is_rejected(self) -> None:
-        invalid = VALID_CONFIG.replace(
-            'threshold = 0.05',
-            'threshold = 0.05\nrecovery_seed = "never"',
+        self.assertEqual(
+            config.wallet.bitcoin_xpubs,
+            ("xpubFirst", "xpubSecond"),
         )
-        with self.assertRaisesRegex(ValueError, "Unknown"):
-            load_config(self.write_config(invalid))
+        self.assertEqual(len(config.wallet.ethereum_addresses), 2)
+
+    def test_missing_required_identifier_is_rejected(self) -> None:
+        environment = dict(VALID_ENV)
+        del environment["HWR_BITCOIN_XPUBS"]
+        with patch.dict(os.environ, environment, clear=True):
+            with self.assertRaisesRegex(ValueError, "HWR_BITCOIN_XPUBS"):
+                load_config()
+
+    def test_placeholder_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "placeholder"):
+            self.load_with_env(
+                HWR_BITCOIN_XPUBS="replace_with_bitcoin_account_xpub"
+            )
+
+    def test_invalid_boolean_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            self.load_with_env(HWR_INCLUDE_UNCONFIRMED_BITCOIN="sometimes")
 
     def test_non_https_remote_provider_is_rejected(self) -> None:
-        invalid = VALID_CONFIG.replace(
-            "https://btc1.trezor.io",
-            "http://btc1.trezor.io",
-        )
         with self.assertRaisesRegex(ValueError, "HTTPS"):
-            load_config(self.write_config(invalid))
+            self.load_with_env(
+                HWR_BITCOIN_BLOCKBOOK_URL="http://btc1.trezor.io"
+            )
 
     def test_zero_ethereum_address_is_rejected(self) -> None:
-        invalid = VALID_CONFIG.replace(
-            "0x1111111111111111111111111111111111111111",
-            "0x0000000000000000000000000000000000000000",
-        )
         with self.assertRaisesRegex(ValueError, "zero address"):
-            load_config(self.write_config(invalid))
+            self.load_with_env(
+                HWR_ETHEREUM_ADDRESSES=(
+                    "0x0000000000000000000000000000000000000000"
+                )
+            )
 
 
 if __name__ == "__main__":

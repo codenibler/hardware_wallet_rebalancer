@@ -36,10 +36,10 @@ No automatic trade execution is included by design.
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-cp config.example.toml config.toml
+cp .env.example .env
 ```
 
-Fill `config.toml` using [the export instructions](docs/SETUP.md), then run:
+Fill `.env` using [the export instructions](docs/SETUP.md), then run:
 
 ```bash
 python run_rebalancer.py
@@ -76,7 +76,6 @@ The demo makes no provider or wallet calls:
 
 ```bash
 python run_rebalancer.py \
-  --config examples/demo_config.toml \
   --holdings-file examples/demo_holdings.json \
   --prices-file examples/demo_prices.json
 ```
@@ -124,7 +123,7 @@ revoke it in BotFather and generate a new one before use.
   not the same as liquid native ETH at the configured address and is not
   automatically discovered.
 - SOL in separately created stake accounts is counted only when those account
-  addresses are listed in `solana_stake_accounts`.
+  addresses are listed in `HWR_SOLANA_STAKE_ACCOUNTS`.
 - Assets held on exchanges, other networks, passphrase wallets, or unlisted
   accounts are not visible.
 - Public providers learn the queried addresses or XPUB. Self-hosted/private

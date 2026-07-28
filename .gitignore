@@ -8,7 +8,5 @@ build/
 *.egg-info/
 
 # Local wallet identifiers and credentials must never be committed.
-config.toml
 .env
-*.local.toml
 reports/

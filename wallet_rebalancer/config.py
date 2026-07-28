@@ -1,13 +1,11 @@
-"""TOML configuration loading and public-identifier validation."""
+"""Environment-only configuration and public-identifier validation."""
 
 from __future__ import annotations
 
 import os
 import re
-import tomllib
 from dataclasses import dataclass
-from decimal import Decimal
-from pathlib import Path
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
 from .models import ASSETS, TARGET_WEIGHTS
@@ -27,7 +25,18 @@ XPUB_PREFIXES = (
 )
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-BASE58_INDEX = {character: index for index, character in enumerate(BASE58_ALPHABET)}
+BASE58_INDEX = {
+    character: index
+    for index, character in enumerate(BASE58_ALPHABET)
+}
+
+DEFAULT_PROVIDER_URLS = {
+    "bitcoin_blockbook_url": "https://btc1.trezor.io",
+    "ethereum_rpc_url": "https://ethereum-rpc.publicnode.com",
+    "solana_rpc_url": "https://api.mainnet-beta.solana.com",
+    "coingecko_url": "https://api.coingecko.com/api/v3",
+}
+DEFAULT_LINK_CONTRACT = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
 
 
 @dataclass(frozen=True)
@@ -63,19 +72,58 @@ class AppConfig:
     policy: PolicyConfig
 
 
-def _unique_strings(values: object, label: str) -> tuple[str, ...]:
-    if not isinstance(values, list) or not all(
-        isinstance(item, str) for item in values
-    ):
-        raise ValueError(f"{label} must be a TOML list of strings")
-    cleaned = tuple(item.strip() for item in values)
-    if any(not item for item in cleaned):
-        raise ValueError(f"{label} cannot contain blank values")
-    if len(set(cleaned)) != len(cleaned):
-        raise ValueError(f"{label} contains duplicates")
-    if any("replace_with" in item for item in cleaned):
-        raise ValueError(f"{label} still contains an example placeholder")
-    return cleaned
+def _csv_env(name: str, *, required: bool) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        if required:
+            raise ValueError(f"{name} is required in .env")
+        return ()
+
+    values = tuple(item.strip() for item in raw.split(",")) if raw.strip() else ()
+    if required and not values:
+        raise ValueError(f"{name} must contain at least one value")
+    if any(not item for item in values):
+        raise ValueError(f"{name} cannot contain blank values")
+    if len(set(values)) != len(values):
+        raise ValueError(f"{name} contains duplicates")
+    if any("replace_with" in item for item in values):
+        raise ValueError(f"{name} still contains an example placeholder")
+    return values
+
+
+def _decimal_env(name: str, default: Decimal) -> Decimal:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = Decimal(raw.strip())
+    except InvalidOperation as exc:
+        raise ValueError(f"{name} must be a decimal number") from exc
+    if not value.is_finite():
+        raise ValueError(f"{name} must be finite")
+    return value
+
+
+def _integer_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+
+
+def _boolean_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false")
 
 
 def _decode_base58(value: str) -> bytes:
@@ -104,9 +152,7 @@ def _validate_solana_address(value: str, label: str) -> None:
         raise ValueError(f"{label} contains an invalid Solana address")
 
 
-def _validate_url(value: object, label: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError(f"{label} must be a URL string")
+def _validate_url(value: str, label: str) -> str:
     url = value.strip().rstrip("/")
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -120,160 +166,78 @@ def _validate_url(value: object, label: str) -> str:
     return url
 
 
-def _section(
-    raw: dict[str, object],
-    name: str,
-    allowed_keys: set[str],
-) -> dict[str, object]:
-    section = raw.get(name)
-    if not isinstance(section, dict):
-        raise ValueError(f"Missing [{name}] section")
-    unknown = sorted(set(section) - allowed_keys)
-    if unknown:
-        raise ValueError(f"Unknown [{name}] settings: {unknown}")
-    return section
+def _provider_url(key: str) -> str:
+    env_name = f"HWR_{key.upper()}"
+    value = os.getenv(env_name, DEFAULT_PROVIDER_URLS[key])
+    return _validate_url(value, env_name)
 
 
-def load_config(path: Path) -> AppConfig:
-    """Load a local config without ever logging its public identifiers."""
+def load_config() -> AppConfig:
+    """Load and validate configuration exclusively from the environment."""
 
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Configuration not found: {path}. Copy config.example.toml "
-            "to config.toml and fill in public account identifiers."
-        )
-    with path.open("rb") as handle:
-        raw = tomllib.load(handle)
-
-    unknown_sections = sorted(set(raw) - {"wallet", "providers", "policy"})
-    if unknown_sections:
-        raise ValueError(f"Unknown configuration sections: {unknown_sections}")
-
-    wallet_raw = _section(
-        raw,
-        "wallet",
-        {
-            "bitcoin_xpubs",
-            "ethereum_addresses",
-            "solana_addresses",
-            "solana_stake_accounts",
-        },
-    )
-    bitcoin_xpubs = _unique_strings(
-        wallet_raw.get("bitcoin_xpubs", []),
-        "wallet.bitcoin_xpubs",
-    )
-    ethereum_addresses = _unique_strings(
-        wallet_raw.get("ethereum_addresses", []),
-        "wallet.ethereum_addresses",
-    )
-    solana_addresses = _unique_strings(
-        wallet_raw.get("solana_addresses", []),
-        "wallet.solana_addresses",
-    )
-    solana_stake_accounts = _unique_strings(
-        wallet_raw.get("solana_stake_accounts", []),
-        "wallet.solana_stake_accounts",
+    bitcoin_xpubs = _csv_env("HWR_BITCOIN_XPUBS", required=True)
+    ethereum_addresses = _csv_env("HWR_ETHEREUM_ADDRESSES", required=True)
+    solana_addresses = _csv_env("HWR_SOLANA_ADDRESSES", required=True)
+    solana_stake_accounts = _csv_env(
+        "HWR_SOLANA_STAKE_ACCOUNTS",
+        required=False,
     )
 
-    if not bitcoin_xpubs:
-        raise ValueError("At least one Bitcoin XPUB is required")
-    if not ethereum_addresses:
-        raise ValueError("At least one Ethereum address is required")
-    if not solana_addresses:
-        raise ValueError("At least one Solana address is required")
     if any(not value.startswith(XPUB_PREFIXES) for value in bitcoin_xpubs):
-        raise ValueError("wallet.bitcoin_xpubs contains an unsupported XPUB prefix")
+        raise ValueError("HWR_BITCOIN_XPUBS contains an unsupported XPUB prefix")
     if any(not EVM_ADDRESS_RE.fullmatch(value) for value in ethereum_addresses):
-        raise ValueError("wallet.ethereum_addresses contains an invalid address")
+        raise ValueError("HWR_ETHEREUM_ADDRESSES contains an invalid address")
     if any(int(value, 16) == 0 for value in ethereum_addresses):
-        raise ValueError("wallet.ethereum_addresses contains the zero address")
+        raise ValueError("HWR_ETHEREUM_ADDRESSES contains the zero address")
     if len({value.lower() for value in ethereum_addresses}) != len(
         ethereum_addresses
     ):
-        raise ValueError("wallet.ethereum_addresses contains duplicates")
+        raise ValueError("HWR_ETHEREUM_ADDRESSES contains duplicates")
     for address in (*solana_addresses, *solana_stake_accounts):
-        _validate_solana_address(address, "wallet.solana addresses")
+        _validate_solana_address(address, "HWR_SOLANA addresses")
     if set(solana_addresses) & set(solana_stake_accounts):
-        raise ValueError("A Solana address cannot also be listed as a stake account")
+        raise ValueError(
+            "A Solana address cannot also be listed as a stake account"
+        )
 
-    providers_raw = _section(
-        raw,
-        "providers",
-        {
-            "bitcoin_blockbook_url",
-            "ethereum_rpc_url",
-            "solana_rpc_url",
-            "coingecko_url",
-            "link_contract",
-        },
-    )
+    link_contract = os.getenv("HWR_LINK_CONTRACT", DEFAULT_LINK_CONTRACT).strip()
+    if not EVM_ADDRESS_RE.fullmatch(link_contract):
+        raise ValueError("HWR_LINK_CONTRACT must be an Ethereum address")
 
-    def provider_url(key: str) -> str:
-        env_key = f"HWR_{key.upper()}"
-        value = os.getenv(env_key, providers_raw.get(key))
-        return _validate_url(value, f"providers.{key}")
-
-    link_contract = providers_raw.get("link_contract")
-    if not isinstance(link_contract, str) or not EVM_ADDRESS_RE.fullmatch(
-        link_contract
-    ):
-        raise ValueError("providers.link_contract must be an Ethereum address")
-
-    policy_raw = _section(
-        raw,
-        "policy",
-        {
-            "target_btc",
-            "target_eth",
-            "target_sol",
-            "target_link",
-            "threshold",
-            "estimated_fee_bps",
-            "include_unconfirmed_bitcoin",
-            "max_price_age_seconds",
-        },
-    )
     targets = {
-        asset: Decimal(
-            str(
-                policy_raw.get(
-                    f"target_{asset.lower()}",
-                    TARGET_WEIGHTS[asset],
-                )
-            )
+        asset: _decimal_env(
+            f"HWR_TARGET_{asset}",
+            TARGET_WEIGHTS[asset],
         )
         for asset in ASSETS
     }
-    if any(not value.is_finite() for value in targets.values()):
-        raise ValueError("Policy target weights must be finite")
     if any(value <= 0 for value in targets.values()) or sum(
-        targets.values(), Decimal("0")
+        targets.values(),
+        Decimal("0"),
     ) != Decimal("1"):
-        raise ValueError("Policy target weights must be positive and sum to 1")
+        raise ValueError(
+            "HWR_TARGET_* weights must be positive and sum to 1"
+        )
 
-    threshold = Decimal(str(policy_raw.get("threshold", "0.05")))
-    estimated_fee_bps = Decimal(
-        str(policy_raw.get("estimated_fee_bps", "0"))
+    threshold = _decimal_env("HWR_THRESHOLD", Decimal("0.05"))
+    estimated_fee_bps = _decimal_env(
+        "HWR_ESTIMATED_FEE_BPS",
+        Decimal("0"),
     )
-    max_price_age_seconds = int(
-        policy_raw.get("max_price_age_seconds", 900)
-    )
-    include_unconfirmed = policy_raw.get(
-        "include_unconfirmed_bitcoin",
+    include_unconfirmed = _boolean_env(
+        "HWR_INCLUDE_UNCONFIRMED_BITCOIN",
         False,
     )
-    numeric_settings = [threshold, estimated_fee_bps]
-    if any(not value.is_finite() for value in numeric_settings):
-        raise ValueError("Policy numeric settings must be finite")
+    max_price_age_seconds = _integer_env(
+        "HWR_MAX_PRICE_AGE_SECONDS",
+        900,
+    )
     if threshold < 0 or threshold > 1:
-        raise ValueError("policy.threshold must be between 0 and 1")
+        raise ValueError("HWR_THRESHOLD must be between 0 and 1")
     if estimated_fee_bps < 0 or estimated_fee_bps > 1_000:
-        raise ValueError("policy.estimated_fee_bps must be in [0, 1000]")
+        raise ValueError("HWR_ESTIMATED_FEE_BPS must be in [0, 1000]")
     if max_price_age_seconds <= 0:
-        raise ValueError("policy.max_price_age_seconds must be positive")
-    if not isinstance(include_unconfirmed, bool):
-        raise ValueError("policy.include_unconfirmed_bitcoin must be boolean")
+        raise ValueError("HWR_MAX_PRICE_AGE_SECONDS must be positive")
 
     return AppConfig(
         wallet=WalletConfig(
@@ -283,10 +247,10 @@ def load_config(path: Path) -> AppConfig:
             solana_stake_accounts=solana_stake_accounts,
         ),
         providers=ProviderConfig(
-            bitcoin_blockbook_url=provider_url("bitcoin_blockbook_url"),
-            ethereum_rpc_url=provider_url("ethereum_rpc_url"),
-            solana_rpc_url=provider_url("solana_rpc_url"),
-            coingecko_url=provider_url("coingecko_url"),
+            bitcoin_blockbook_url=_provider_url("bitcoin_blockbook_url"),
+            ethereum_rpc_url=_provider_url("ethereum_rpc_url"),
+            solana_rpc_url=_provider_url("solana_rpc_url"),
+            coingecko_url=_provider_url("coingecko_url"),
             link_contract=link_contract,
         ),
         policy=PolicyConfig(

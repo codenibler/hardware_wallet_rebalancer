@@ -146,12 +146,6 @@ def _plan_from_args(
 
 def _add_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path(os.getenv("HWR_CONFIG", "config.toml")),
-        help="Local TOML config (default: config.toml)",
-    )
-    parser.add_argument(
         "--threshold",
         type=_non_negative_decimal,
         help="Override max absolute drift trigger as a decimal",
@@ -227,7 +221,7 @@ def _require_env(name: str) -> str:
 
 
 def _check_command(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_config()
     args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
     plan = _plan_from_args(args, config)
     text_report = render_text(plan)
@@ -258,7 +252,7 @@ def _discover_command(args: argparse.Namespace) -> int:
 
 
 def _bot_command(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_config()
     token = _require_env("TELEGRAM_BOT_TOKEN")
     allowed_raw = _require_env("TELEGRAM_ALLOWED_CHAT_IDS")
     try:

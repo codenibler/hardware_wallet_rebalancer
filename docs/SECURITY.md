@@ -30,7 +30,7 @@ also expose their on-chain activity. Risks include:
 
 Controls:
 
-- `config.toml` and `.env` are ignored by Git;
+- `.env` is ignored by Git;
 - provider failures omit account identifiers;
 - Telegram bot mode requires numeric chat allowlisting;
 - no report contains wallet addresses or XPUBs;
@@ -41,7 +41,7 @@ For stronger privacy, use a private Blockbook/RPC provider, route traffic
 appropriately, and restrict file permissions:
 
 ```bash
-chmod 600 config.toml .env
+chmod 600 .env
 ```
 
 ## Telegram token
