@@ -6,6 +6,7 @@ import json
 from decimal import Decimal
 from typing import Any
 
+from .exchange_scanner import VenueMarketSnapshot
 from .models import ASSETS, ZERO, PortfolioPlan
 
 
@@ -147,8 +148,19 @@ def render_text(plan: PortfolioPlan) -> str:
     return "\n".join(lines)
 
 
-def render_order_message(plan: PortfolioPlan) -> str:
-    """Render an ordered Telegram list of proposed trades."""
+def render_order_message(
+    plan: PortfolioPlan,
+    *,
+    venues: VenueMarketSnapshot | None = None,
+    venue_error: str | None = None,
+) -> str:
+    """Render proposed trades with live venue recommendations for Telegram."""
+
+    venue_method = (
+        " Live venue quotes and taker fees are included below."
+        if venues is not None
+        else " The configured fee estimate is used below."
+    )
 
     if plan.threshold_rebalance_needed:
         lines = [
@@ -157,8 +169,8 @@ def render_order_message(plan: PortfolioPlan) -> str:
             (
                 f"The divergence of {_percent(plan.max_abs_drift)} has reached "
                 f"or exceeded the {_percent(plan.threshold)} threshold. This is "
-                "how to return it to the desired state using the configured "
-                "fee estimate."
+                "how to return it to the desired state."
+                f"{venue_method}"
             ),
             "",
         ]
@@ -171,6 +183,7 @@ def render_order_message(plan: PortfolioPlan) -> str:
                 f"{_percent(plan.threshold)} threshold, so no threshold "
                 "rebalance is needed. This is how to invest the new capital "
                 "while returning to the desired allocation."
+                f"{venue_method}"
             ),
             "",
         ]
@@ -197,24 +210,88 @@ def render_order_message(plan: PortfolioPlan) -> str:
         )
         return "\n".join(lines)
 
-    fee_rate = plan.estimated_fee_bps / Decimal("10000")
+    fallback_fee_rate = plan.estimated_fee_bps / Decimal("10000")
+    recommended_fees = ZERO
+    ranked_trade_count = 0
     for trade in plan.trades:
         marker = "🔴" if trade.side == "SELL" else "🟢"
         if plan.threshold_rebalance_needed:
             reason = f"rebalance {trade.side.lower()}"
         else:
             reason = "top-up allocation"
+
+        ranking = (
+            venues.rank(
+                asset=trade.asset,
+                side=trade.side,
+                amount=trade.amount,
+            )
+            if venues is not None
+            else ()
+        )
+        if ranking:
+            best = ranking[0]
+            trade_fee = best.estimated_fee_eur(trade.side, trade.amount)
+            recommended_fees += trade_fee
+            ranked_trade_count += 1
+            venue_text = f", venue={best.exchange_name}"
+        else:
+            trade_fee = trade.notional_eur * fallback_fee_rate
+            venue_text = ""
+
         lines.append(
             f"{marker} {trade.asset}, "
             f"{_amount(trade.asset, trade.amount)} {trade.asset}, "
             f"{_money(trade.notional_eur)}, "
-            f"fee≈{_money(trade.notional_eur * fee_rate)}, "
+            f"fee≈{_money(trade_fee)}"
+            f"{venue_text}, "
             f"reason={reason}"
         )
-    lines.append(
-        f"Estimated total fees: {_money(plan.estimated_fees_eur)} "
-        f"({plan.estimated_fee_bps} bps on gross traded value)"
+        if ranking:
+            price_label = "all-in" if trade.side == "BUY" else "net"
+            alternatives = []
+            for index, quote in enumerate(ranking, start=1):
+                shallow = (
+                    ""
+                    if quote.covers(trade.side, trade.amount)
+                    else " (shallow)"
+                )
+                alternatives.append(
+                    f"{index}) {quote.exchange_name} "
+                    f"{price_label} "
+                    f"{_money(quote.effective_unit_price_eur(trade.side))}"
+                    f"/{trade.asset}{shallow}"
+                )
+            lines.append("   Top venues: " + " | ".join(alternatives))
+
+    if ranked_trade_count == len(plan.trades):
+        total_fee_text = (
+            f"Estimated total trading fees: {_money(recommended_fees)} "
+            "(recommended venues)"
+        )
+    else:
+        total_fee_text = (
+            f"Estimated total fees: {_money(plan.estimated_fees_eur)} "
+            f"({plan.estimated_fee_bps} bps on gross traded value)"
+        )
+    lines.extend(
+        [
+            "",
+            total_fee_text,
+        ]
     )
+    if venues is not None:
+        lines.append(
+            "Venue rankings use live top-of-book EUR quotes and exclude "
+            "funding, withdrawal, and network fees."
+        )
+        if venues.failures:
+            lines.append(
+                f"Coverage: {len(venues.failures)} unavailable venue/market "
+                "quote(s) were skipped."
+            )
+    elif venue_error:
+        lines.append(f"Venue comparison unavailable: {venue_error}")
     return "\n".join(lines)
 
 

@@ -14,6 +14,7 @@ from typing import Sequence
 from dotenv import load_dotenv
 
 from .config import AppConfig, load_config
+from .exchange_scanner import ExchangeScanner
 from .models import Holdings, PriceBook
 from .planner import build_plan
 from .providers import ProviderError, PublicDataClient
@@ -285,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit the latest performance summary as JSON",
     )
+
     return parser
 
 
@@ -295,19 +297,32 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _render_orders_with_venues(plan) -> str:
+    if not getattr(plan, "trades", ()):
+        return render_order_message(plan)
+    try:
+        venues = ExchangeScanner().fetch_markets()
+    except (RuntimeError, ValueError) as exc:
+        return render_order_message(plan, venue_error=str(exc))
+    return render_order_message(plan, venues=venues)
+
+
 def _check_command(args: argparse.Namespace) -> int:
     config = load_config()
     args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
     plan = _plan_from_args(args, config)
     text_report = render_text(plan)
-    print(render_json(plan) if args.json else text_report, end="" if args.json else "\n")
+    print(
+        render_json(plan) if args.json else text_report,
+        end="" if args.json else "\n",
+    )
 
     if not args.no_telegram:
         token = _require_env("TELEGRAM_BOT_TOKEN")
         chat_id = _require_env("TELEGRAM_CHAT_ID")
         TelegramClient(token).send_message(
             chat_id,
-            render_order_message(plan),
+            _render_orders_with_venues(plan),
         )
     return 0
 
@@ -345,7 +360,7 @@ def _bot_command(args: argparse.Namespace) -> int:
         ) from exc
 
     def check_callback(top_up: Decimal) -> str:
-        return render_order_message(
+        return _render_orders_with_venues(
             _plan_from_args(args, config, top_up_override=top_up)
         )
 

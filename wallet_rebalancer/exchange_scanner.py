@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import requests
 
@@ -26,9 +26,6 @@ DEFAULT_TAKER_FEE_BPS = {
     "coinbase": Decimal("60"),
     "okx": Decimal("35"),
 }
-AMOUNT_DECIMALS = {"BTC": 8, "ETH": 8, "SOL": 6, "LINK": 6}
-
-
 class ExchangeScanError(RuntimeError):
     """A sanitized market-data failure."""
 
@@ -86,25 +83,40 @@ class ExchangeQuote:
     pair: str
     ask_eur: Decimal
     ask_size: Decimal
+    bid_eur: Decimal
+    bid_size: Decimal
     taker_fee_bps: Decimal
     quoted_at: datetime
     trade_url: str
 
-    @property
-    def effective_unit_price_eur(self) -> Decimal:
-        return self.ask_eur * (
-            Decimal("1") + self.taker_fee_bps / Decimal("10000")
-        )
+    def effective_unit_price_eur(self, side: str) -> Decimal:
+        fee_rate = self.taker_fee_bps / Decimal("10000")
+        if side == "BUY":
+            return self.ask_eur * (Decimal("1") + fee_rate)
+        if side == "SELL":
+            return self.bid_eur * (Decimal("1") - fee_rate)
+        raise ValueError("Trade side must be BUY or SELL")
 
-    def estimated_crypto(self, purchase_eur: Decimal) -> Decimal:
-        return purchase_eur / self.effective_unit_price_eur
+    def execution_price_eur(self, side: str) -> Decimal:
+        if side == "BUY":
+            return self.ask_eur
+        if side == "SELL":
+            return self.bid_eur
+        raise ValueError("Trade side must be BUY or SELL")
 
-    def covers(self, purchase_eur: Decimal) -> bool:
+    def covers(self, side: str, amount: Decimal) -> bool:
+        available = self.ask_size if side == "BUY" else self.bid_size
+        return available >= amount
+
+    def estimated_fee_eur(self, side: str, amount: Decimal) -> Decimal:
         return (
-            self.ask_size * self.effective_unit_price_eur >= purchase_eur
+            amount
+            * self.execution_price_eur(side)
+            * self.taker_fee_bps
+            / Decimal("10000")
         )
 
-    def to_dict(self, purchase_eur: Decimal) -> dict[str, object]:
+    def to_dict(self, *, side: str, amount: Decimal) -> dict[str, object]:
         return {
             "asset": self.asset,
             "exchange_id": self.exchange_id,
@@ -112,40 +124,58 @@ class ExchangeQuote:
             "pair": self.pair,
             "ask_eur": str(self.ask_eur),
             "ask_size": str(self.ask_size),
+            "bid_eur": str(self.bid_eur),
+            "bid_size": str(self.bid_size),
             "taker_fee_bps": str(self.taker_fee_bps),
-            "effective_unit_price_eur": str(self.effective_unit_price_eur),
-            "estimated_crypto": str(self.estimated_crypto(purchase_eur)),
-            "covers_purchase_at_best_ask": self.covers(purchase_eur),
+            "side": side,
+            "trade_amount": str(amount),
+            "effective_unit_price_eur": str(
+                self.effective_unit_price_eur(side)
+            ),
+            "estimated_fee_eur": str(self.estimated_fee_eur(side, amount)),
+            "covers_trade_at_best_quote": self.covers(side, amount),
             "quoted_at": _iso(self.quoted_at),
             "trade_url": self.trade_url,
         }
 
 
 @dataclass(frozen=True)
-class ExchangeScanResult:
-    purchase_eur: Decimal
+class VenueMarketSnapshot:
     as_of: datetime
-    rankings: Mapping[str, tuple[ExchangeQuote, ...]]
+    quotes: Mapping[str, tuple[ExchangeQuote, ...]]
     failures: tuple[str, ...]
 
-    def to_dict(self, *, limit: int = 3) -> dict[str, object]:
-        return {
-            "purchase_eur": str(self.purchase_eur),
-            "as_of": _iso(self.as_of),
-            "method": "best EUR ask plus configured taker fee",
-            "rankings": {
-                asset: [
-                    quote.to_dict(self.purchase_eur)
-                    for quote in self.rankings.get(asset, ())[:limit]
-                ]
-                for asset in ASSETS
-            },
-            "failures": list(self.failures),
-        }
+    def rank(
+        self,
+        *,
+        asset: str,
+        side: str,
+        amount: Decimal,
+        limit: int = 3,
+    ) -> tuple[ExchangeQuote, ...]:
+        if asset not in ASSETS:
+            raise ValueError(f"Unsupported asset: {asset}")
+        if side not in {"BUY", "SELL"}:
+            raise ValueError("Trade side must be BUY or SELL")
+        if amount <= ZERO:
+            raise ValueError("Trade amount must be positive")
+
+        def sort_key(quote: ExchangeQuote) -> tuple[bool, Decimal, str]:
+            effective = quote.effective_unit_price_eur(side)
+            ranked_price = effective if side == "BUY" else -effective
+            return (
+                not quote.covers(side, amount),
+                ranked_price,
+                quote.exchange_name,
+            )
+
+        return tuple(
+            sorted(self.quotes.get(asset, ()), key=sort_key)[:limit]
+        )
 
 
 class ExchangeScanner:
-    """Fetch and rank top-of-book EUR asks from Dutch-accessible venues."""
+    """Fetch fee-aware EUR bid/ask quotes from Dutch-accessible venues."""
 
     def __init__(
         self,
@@ -200,13 +230,20 @@ class ExchangeScanner:
         ask: object,
         bid: object,
         ask_size: object,
+        bid_size: object,
         quoted_at: datetime,
         trade_url: str,
     ) -> ExchangeQuote:
         ask_value = _decimal(ask, EXCHANGE_NAMES[exchange])
         bid_value = _decimal(bid, EXCHANGE_NAMES[exchange])
-        size_value = _decimal(ask_size, EXCHANGE_NAMES[exchange])
-        if ask_value <= ZERO or bid_value <= ZERO or size_value <= ZERO:
+        ask_size_value = _decimal(ask_size, EXCHANGE_NAMES[exchange])
+        bid_size_value = _decimal(bid_size, EXCHANGE_NAMES[exchange])
+        if (
+            ask_value <= ZERO
+            or bid_value <= ZERO
+            or ask_size_value <= ZERO
+            or bid_size_value <= ZERO
+        ):
             raise _VenueError(
                 f"{EXCHANGE_NAMES[exchange]} {asset}/EUR has no usable quote"
             )
@@ -220,7 +257,9 @@ class ExchangeScanner:
             exchange_name=EXCHANGE_NAMES[exchange],
             pair=f"{asset}-EUR",
             ask_eur=ask_value,
-            ask_size=size_value,
+            ask_size=ask_size_value,
+            bid_eur=bid_value,
+            bid_size=bid_size_value,
             taker_fee_bps=self.fees[exchange],
             quoted_at=quoted_at,
             trade_url=trade_url,
@@ -256,6 +295,7 @@ class ExchangeScanner:
                         ask=row.get("ask"),
                         bid=row.get("bid"),
                         ask_size=row.get("askSize"),
+                        bid_size=row.get("bidSize"),
                         quoted_at=fetched_at,
                         trade_url=(
                             "https://account.bitvavo.com/markets/"
@@ -310,7 +350,7 @@ class ExchangeScanner:
                 not isinstance(ask, list)
                 or len(ask) < 3
                 or not isinstance(bid, list)
-                or not bid
+                or len(bid) < 3
             ):
                 failures.append(f"{label} {asset}/EUR returned malformed data")
                 continue
@@ -322,6 +362,7 @@ class ExchangeScanner:
                         ask=ask[0],
                         bid=bid[0],
                         ask_size=ask[2],
+                        bid_size=bid[2],
                         quoted_at=fetched_at,
                         trade_url=(
                             "https://pro.kraken.com/app/trade/"
@@ -369,6 +410,7 @@ class ExchangeScanner:
                         ask=asks[0][0],
                         bid=bids[0][0],
                         ask_size=asks[0][1],
+                        bid_size=bids[0][1],
                         quoted_at=_utc_now(),
                         trade_url=(
                             "https://www.coinbase.com/advanced-trade/spot/"
@@ -418,6 +460,7 @@ class ExchangeScanner:
                         ask=row.get("askPx"),
                         bid=row.get("bidPx"),
                         ask_size=row.get("askSz"),
+                        bid_size=row.get("bidSz"),
                         quoted_at=quoted_at,
                         trade_url=(
                             "https://www.okx.com/en-eu/trade-spot/"
@@ -432,18 +475,8 @@ class ExchangeScanner:
                     failures.append(f"{label} {asset}/EUR has an invalid timestamp")
         return quotes, failures
 
-    def scan(
-        self,
-        purchase_eur: Decimal | str | int | float = Decimal("1000"),
-    ) -> ExchangeScanResult:
-        """Rank supported exchange quotes by ask price plus taker fee."""
-
-        try:
-            purchase = Decimal(str(purchase_eur))
-        except (InvalidOperation, ValueError) as exc:
-            raise ValueError("Purchase amount must be a decimal number") from exc
-        if not purchase.is_finite() or purchase <= ZERO:
-            raise ValueError("Purchase amount must be positive and finite")
+    def fetch_markets(self) -> VenueMarketSnapshot:
+        """Fetch one reusable market snapshot for all proposed orders."""
 
         fetchers = {
             "bitvavo": self._fetch_bitvavo,
@@ -466,79 +499,13 @@ class ExchangeScanner:
                 "No supported exchange returned a usable EUR spot quote"
             )
 
-        rankings = {
-            asset: tuple(
-                sorted(
-                    (quote for quote in quotes if quote.asset == asset),
-                    key=lambda quote: (
-                        not quote.covers(purchase),
-                        quote.effective_unit_price_eur,
-                        quote.exchange_name,
-                    ),
-                )
-            )
-            for asset in ASSETS
-        }
-        return ExchangeScanResult(
-            purchase_eur=purchase,
+        return VenueMarketSnapshot(
             as_of=_utc_now(),
-            rankings=rankings,
+            quotes={
+                asset: tuple(
+                    quote for quote in quotes if quote.asset == asset
+                )
+                for asset in ASSETS
+            },
             failures=tuple(failures),
         )
-
-
-def render_exchange_scan(
-    result: ExchangeScanResult,
-    *,
-    limit: int = 3,
-) -> str:
-    """Render top fee-adjusted buy venues for terminal or Telegram."""
-
-    lines = [
-        "DUTCH EUR CRYPTO EXCHANGE SCAN",
-        (
-            f"Comparing an immediate €{result.purchase_eur:,.2f} taker buy "
-            "using live best asks plus configured trading fees."
-        ),
-        (
-            "Excludes deposit, withdrawal, network, and price impact beyond "
-            "the displayed best ask."
-        ),
-    ]
-    for asset in ASSETS:
-        lines.extend(["", asset])
-        quotes = result.rankings.get(asset, ())[:limit]
-        if not quotes:
-            lines.append("No usable direct EUR quote was returned.")
-            continue
-        for rank, quote in enumerate(quotes, start=1):
-            amount = quote.estimated_crypto(result.purchase_eur)
-            depth_warning = "" if quote.covers(result.purchase_eur) else " ⚠ shallow"
-            lines.append(
-                f"{rank}. {quote.exchange_name}: "
-                f"ask €{quote.ask_eur:,.2f}, "
-                f"fee {quote.taker_fee_bps / 100:.2f}%, "
-                f"effective €{quote.effective_unit_price_eur:,.2f}/{asset}, "
-                f"receive≈{amount:,.{AMOUNT_DECIMALS[asset]}f} {asset}"
-                f"{depth_warning}"
-            )
-    if result.failures:
-        lines.extend(
-            [
-                "",
-                (
-                    f"Coverage note: {len(result.failures)} unavailable or "
-                    "invalid venue/market quote(s) were skipped."
-                ),
-            ]
-        )
-    lines.extend(
-        [
-            "",
-            (
-                "Check the final order preview and withdrawal fee before "
-                "buying; quotes can change immediately."
-            ),
-        ]
-    )
-    return "\n".join(lines)

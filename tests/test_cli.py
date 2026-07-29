@@ -5,9 +5,14 @@ import io
 import os
 import unittest
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from wallet_rebalancer.cli import _check_command, _prompt_top_up, build_parser
+from wallet_rebalancer.cli import (
+    _check_command,
+    _prompt_top_up,
+    build_parser,
+)
 
 
 class PromptTopUpTests(unittest.TestCase):
@@ -81,7 +86,6 @@ class CheckArgumentTests(unittest.TestCase):
         ):
             build_parser().parse_args(["track", "--start-date", "July 28"])
 
-
 class TelegramDeliveryTests(unittest.TestCase):
     def test_check_sends_to_telegram_by_default(self) -> None:
         args = build_parser().parse_args(["check", "--no-prompt"])
@@ -138,6 +142,65 @@ class TelegramDeliveryTests(unittest.TestCase):
             self.assertEqual(_check_command(args), 0)
 
         client_class.assert_not_called()
+
+    def test_trade_plan_scans_venues_before_telegram_delivery(self) -> None:
+        args = build_parser().parse_args(["check", "--no-prompt"])
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "test-token:secret",
+            "TELEGRAM_CHAT_ID": "123456",
+        }
+        plan = SimpleNamespace(trades=(object(),))
+        venue_snapshot = object()
+
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
+            patch("wallet_rebalancer.cli.render_text", return_value="report"),
+            patch("wallet_rebalancer.cli.ExchangeScanner") as scanner_class,
+            patch(
+                "wallet_rebalancer.cli.render_order_message",
+                return_value="orders with venues",
+            ) as render_orders,
+            patch("wallet_rebalancer.cli.TelegramClient"),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            scanner_class.return_value.fetch_markets.return_value = venue_snapshot
+            self.assertEqual(_check_command(args), 0)
+
+        scanner_class.return_value.fetch_markets.assert_called_once_with()
+        render_orders.assert_called_once_with(plan, venues=venue_snapshot)
+
+    def test_venue_failure_does_not_block_portfolio_message(self) -> None:
+        args = build_parser().parse_args(["check", "--no-prompt"])
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "test-token:secret",
+            "TELEGRAM_CHAT_ID": "123456",
+        }
+        plan = SimpleNamespace(trades=(object(),))
+
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
+            patch("wallet_rebalancer.cli.render_text", return_value="report"),
+            patch("wallet_rebalancer.cli.ExchangeScanner") as scanner_class,
+            patch(
+                "wallet_rebalancer.cli.render_order_message",
+                return_value="orders without venues",
+            ) as render_orders,
+            patch("wallet_rebalancer.cli.TelegramClient"),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            scanner_class.return_value.fetch_markets.side_effect = RuntimeError(
+                "market data unavailable"
+            )
+            self.assertEqual(_check_command(args), 0)
+
+        render_orders.assert_called_once_with(
+            plan,
+            venue_error="market data unavailable",
+        )
 
 
 if __name__ == "__main__":

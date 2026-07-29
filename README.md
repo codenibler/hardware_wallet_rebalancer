@@ -27,6 +27,7 @@ a recovery seed, PIN, passphrase, or private key.
 - Human-readable and JSON output.
 - Default ordered Telegram delivery and an allowlisted `/check [top_up]` bot.
 - Persistent rebalancing-vs-buy-and-hold performance tracking and SVG charts.
+- Automatic fee-adjusted venue recommendations for every proposed order.
 - Deterministic offline demo and unit tests.
 
 No automatic trade execution is included by design.
@@ -135,6 +136,45 @@ intentionally ignored by Git because it contains portfolio history; back it up
 privately. Direct value/return comparisons assume no unrecorded deposits or
 withdrawals after initialization.
 
+## Automatic Dutch exchange comparison
+
+The normal rebalancer run now compares direct EUR spot order books
+automatically:
+
+```bash
+python run_rebalancer.py
+```
+
+When a rebalance or top-up produces orders, that same run checks Bitvavo,
+Kraken Pro, Coinbase Advanced, and OKX Europe. Each order in the Telegram
+report names the recommended venue and its top three alternatives. Buys are
+ranked by the lowest best ask plus taker fee; sells are ranked by the highest
+best bid after taker fee. Venues without enough liquidity at the best quote
+are ranked below venues that can cover the proposed amount.
+
+This is an outbound-only workflow: run `run_rebalancer.py` and receive the
+combined balance, order, fee, and venue report through Telegram. No `/scan` or
+other incoming bot message is required.
+
+The defaults in `.env.example` are entry-tier taker-fee assumptions:
+
+- [Bitvavo](https://bitvavo.com/en/fees): 25 bps
+- [Kraken Pro](https://support.kraken.com/articles/cross-platform-fee-tier-changes):
+  80 bps
+- [Coinbase Advanced](https://help.coinbase.com/en-gb/coinbase/trading-and-funding/advanced-trade/what-is-advanced-trade):
+  60 bps
+- [OKX Europe](https://www.okx.com/en-eu/help/notice-updates-to-okx-eea-trading-fees):
+  35 bps
+
+Fee tiers are account-specific and can change. Set
+`HWR_BITVAVO_TAKER_FEE_BPS`, `HWR_KRAKEN_TAKER_FEE_BPS`,
+`HWR_COINBASE_TAKER_FEE_BPS`, and `HWR_OKX_TAKER_FEE_BPS` to the rates shown in
+your accounts. The ranking excludes fiat funding charges, crypto withdrawal
+and network fees, and slippage beyond the displayed best bid or ask. Always
+verify the exchange order preview and current Dutch availability in the
+[AFM crypto register](https://www.afm.nl/en/sector/registers/vergunningenregisters/cryptopartijen)
+before trading.
+
 ## Telegram
 
 The bot token and chat IDs belong in an ignored `.env` file, never in source:
@@ -164,7 +204,8 @@ python -m wallet_rebalancer bot
 ```
 
 Then send `/check` or `/check 1000`. Bot mode refuses to start without
-`TELEGRAM_ALLOWED_CHAT_IDS`.
+`TELEGRAM_ALLOWED_CHAT_IDS`. This optional polling mode is not needed for the
+normal outbound-only `run_rebalancer.py` workflow.
 
 If a bot token has ever appeared in chat, source control, logs, or screenshots,
 revoke it in BotFather and generate a new one before use.

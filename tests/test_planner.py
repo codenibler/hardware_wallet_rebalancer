@@ -4,6 +4,10 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from wallet_rebalancer.exchange_scanner import (
+    ExchangeQuote,
+    VenueMarketSnapshot,
+)
 from wallet_rebalancer.models import Holdings, PriceBook
 from wallet_rebalancer.planner import build_plan
 from wallet_rebalancer.reporting import (
@@ -71,7 +75,7 @@ class PlannerTests(unittest.TestCase):
             order_lines[4],
         )
         self.assertTrue(
-            all("reason=rebalance buy" in line for line in order_lines[5:-1])
+            all("reason=rebalance buy" in line for line in order_lines[5:-2])
         )
         self.assertTrue(order_lines[-1].startswith("Estimated total fees:"))
 
@@ -128,6 +132,66 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertIn("No rebalancing trades are needed.", message)
         self.assertNotIn("out of balance", message)
+
+    def test_telegram_orders_include_ranked_buy_and_sell_venues(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 800, "ETH": 100, "SOL": 50, "LINK": 50},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            threshold="0.05",
+            estimated_fee_bps="50",
+        )
+
+        def quote(
+            asset: str,
+            exchange_id: str,
+            exchange_name: str,
+            ask: str,
+            bid: str,
+        ) -> ExchangeQuote:
+            return ExchangeQuote(
+                asset=asset,
+                exchange_id=exchange_id,
+                exchange_name=exchange_name,
+                pair=f"{asset}-EUR",
+                ask_eur=Decimal(ask),
+                ask_size=Decimal("1000"),
+                bid_eur=Decimal(bid),
+                bid_size=Decimal("1000"),
+                taker_fee_bps=Decimal("10"),
+                quoted_at=NOW,
+                trade_url="https://example.test",
+            )
+
+        venues = VenueMarketSnapshot(
+            as_of=NOW,
+            quotes={
+                asset: (
+                    quote(asset, "low_ask", "Low Ask", "0.99", "0.96"),
+                    quote(asset, "middle", "Middle", "1.00", "0.97"),
+                    quote(asset, "high_bid", "High Bid", "1.01", "0.98"),
+                )
+                for asset in ("BTC", "ETH", "SOL", "LINK")
+            },
+            failures=(),
+        )
+
+        message = render_order_message(plan, venues=venues)
+
+        self.assertIn("venue=High Bid, reason=rebalance sell", message)
+        self.assertIn("venue=Low Ask, reason=rebalance buy", message)
+        self.assertIn(
+            "Top venues: 1) High Bid net €0.98/BTC",
+            message,
+        )
+        self.assertIn(
+            "Top venues: 1) Low Ask all-in €0.99/ETH",
+            message,
+        )
+        self.assertIn("Estimated total trading fees:", message)
+        self.assertIn("(recommended venues)", message)
 
     def test_top_up_required_for_buy_only_is_calculated(self) -> None:
         plan = build_plan(
