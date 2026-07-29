@@ -1,17 +1,15 @@
 # Hardware wallet rebalancer
 
-A read-only BTC, ETH, SOL, and LINK portfolio monitor. It compares the current
-allocation with these targets:
-
+A portfolio monitor which tracks holdings against desired split of 
 - BTC: 50%
 - ETH: 25%
 - SOL: 15%
 - LINK: 10%
+and recommends rebalances when %s deviate more than 5 percent. Notifies of adjustments through a Telegram bot, and searches for the best deals from available brokers and fiat on-ramp platforms. 
 
-It recommends trades and venues but never signs or submits transactions.
+Tracks performance of this rebalancing strategy vs. a buy & hold, accounting for new deposits and increasing both by the net increment in portfolio value. 
 
 ## Project layout
-
 - `main.py`: fetch balances, calculate a fee-aware rebalance, rank venues, and
   send the result through Telegram.
 - `tracking.py`: record portfolio performance against the fixed buy-and-hold
@@ -23,7 +21,6 @@ It recommends trades and venues but never signs or submits transactions.
 - `reports/`: private generated analytics; ignored by Git.
 
 ## Install
-
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -42,8 +39,7 @@ TELEGRAM_BOT_TOKEN=botfather_token
 TELEGRAM_CHAT_ID=numeric_chat_id
 ```
 
-Export only public account identifiers from Trezor Suite:
-
+Fill in env vars with XPUBS from Trezor Suite / other hardware wallets. For these holdings in particular, 
 - Bitcoin: open each funded account, select **Details**, then **Show public
   key**. Include every used account and account type.
 - Ethereum and LINK: use the verified Ethereum receive address. LINK is read
@@ -51,11 +47,9 @@ Export only public account identifiers from Trezor Suite:
 - Solana: use each verified receive address. List delegated stake-account
   addresses separately in `HWR_SOLANA_STAKE_ACCOUNTS`.
 
-Never enter a recovery seed, Shamir share, PIN, passphrase, private key, or
-signing authorization. An XPUB cannot spend funds, but it reveals the complete
-account history, so keep `.env` private.
+No pins, recovery seeds, or private keys are stored, so only your account history can be seen if you leak these variables. Still, try to avoid this. 
 
-## Run a portfolio check
+## Usage
 
 ```bash
 python main.py
@@ -74,7 +68,7 @@ python main.py --no-prompt
 ```
 
 A successful check sends the report to Telegram by default. Use
-`--no-telegram` only for local troubleshooting. Other useful options are:
+`--no-telegram` only for local troubleshooting. You can also set fixed fees and JSON exports with. For Bitvavo, Kraken, Coinbase, and OKX, there are .env vars with the default fees. For Banxa, Invity, Mercuryo, Anycoin Direct, BTC Direct, and MoonPay, they are fetched and calculated dynamically.
 
 ```bash
 python main.py --fee-bps 75
@@ -85,57 +79,13 @@ The planner adds the stated deposit, estimates fees on gross buys and sells,
 and solves the target allocation using the remaining post-fee value. It only
 plans orders; it does not execute them.
 
-When orders are needed, it ranks the top three available quotes for each coin
-from Bitvavo, Kraken Pro, Coinbase Advanced, OKX Europe, Banxa, Invity,
-Mercuryo, Anycoin Direct, BTC Direct, and MoonPay. Configure account-specific
-taker fees and optional payment-method filters in `.env`.
+When orders are needed, it ranks the top three available quotes for each coin from the previously stated providers. You can configure constraints on payment methods in the .env. 
 
-Quotes can omit funding, withdrawal, network, spread, tax, minimum-size, and
-rounding costs. Always verify the provider's final preview before trading.
+Quotes can omit funding, withdrawal, network, spread, tax, minimum-size, and rounding costs. Always verify the provider's final preview before trading.
+
 
 ## Performance tracking
-
-After the initial portfolio snapshot or a completed rebalance, run:
-
-```bash
-python tracking.py --note "Completed rebalance"
-```
-
-The first run freezes the supplied coin quantities and allocation as the
-July 28, 2026 buy-and-hold benchmark. Later runs value:
-
-1. the latest real wallet balances; and
-2. the benchmark quantities that have been bought and held without
-   rebalancing;
-
-using the same price snapshot. Results are written to:
-
-- `reports/portfolio_tracking.json`
-- `reports/portfolio_performance.csv`
-- `reports/portfolio_value.svg`
-- `reports/portfolio_returns.svg`
-
-Entering a top-up in `main.py` creates a plan; it does not prove that the
-deposit and trades were completed. After the purchased coins are visible in
-the fetched wallet balances, record the completed deposit explicitly:
-
-```bash
-python tracking.py \
-  --deposit-eur 1000 \
-  --deposit-fee-bps 50 \
-  --note "Completed €1,000 deposit"
-```
-
-If `--deposit-fee-bps` is omitted, the benchmark uses
-`HWR_ESTIMATED_FEE_BPS`. The tracker records the gross cash flow, subtracts the
-simulated purchase fee, buys additional benchmark units using the original
-allocation, and never rebalances those units. Both strategies use chained
-time-weighted returns, so deposits cannot be counted as investment
-performance. The tracker refuses to record a deposit until the real wallet
-value has increased at the current price snapshot.
-
-The installed user timer runs this tracker daily at 20:00
-Europe/Amsterdam:
+To have daily granularity in benchmarking this rebalancing strategy vs the buy & hold, the balances are checked daily at 20:00 Europe/Amsterdam:
 
 ```bash
 systemctl --user status hwr-tracking.timer
@@ -171,16 +121,7 @@ python -m wallet_rebalancer bot
 Set `TELEGRAM_ALLOWED_CHAT_IDS` before using bot mode. If a token is exposed,
 revoke it through BotFather immediately.
 
-## Offline validation
-
-The offline demo makes no wallet, price-provider, exchange, or Telegram calls:
-
-```bash
-python main.py \
-  --holdings-file examples/demo_holdings.json \
-  --prices-file examples/demo_prices.json \
-  --no-telegram
-```
+## Testing
 
 Run all tests with:
 
@@ -188,13 +129,4 @@ Run all tests with:
 python -m unittest discover -v
 ```
 
-## Scope
 
-- Only configured accounts are visible.
-- ETH in staking, lending, bridging, or other contracts is not counted as
-  liquid native ETH.
-- SOL stake accounts are counted only when explicitly configured.
-- Assets on exchanges, other networks, or unlisted passphrase wallets are not
-  visible.
-- Public providers can correlate wallet identifiers with the requesting IP.
-- Reports and logs reveal portfolio values and should be treated as private.
