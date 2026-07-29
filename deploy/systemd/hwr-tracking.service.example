@@ -2,6 +2,7 @@
 Description=Update hardware wallet strategy performance analytics
 After=network-online.target
 Wants=network-online.target
+OnFailure=hwr-tracking-notify.service
 
 [Service]
 Type=oneshot

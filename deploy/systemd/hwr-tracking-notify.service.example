@@ -1,0 +1,18 @@
+[Unit]
+Description=Send Telegram alert when daily strategy tracking fails
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Projects/hardware_wallet_rebalancer
+EnvironmentFile=-%h/Projects/hardware_wallet_rebalancer/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/Projects/hardware_wallet_rebalancer/.venv/bin/python -m wallet_rebalancer.failure_notification
+Restart=on-failure
+RestartSec=5min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

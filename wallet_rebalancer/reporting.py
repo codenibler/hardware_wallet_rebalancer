@@ -200,15 +200,6 @@ def render_order_message(
         ]
 
     if not plan.has_trade_plan or not plan.trades:
-        lines.extend(
-            [
-                "",
-                (
-                    f"Estimated total fees: {_money(plan.estimated_fees_eur)} "
-                    f"({plan.estimated_fee_bps} bps assumption)"
-                ),
-            ]
-        )
         return "\n".join(lines)
 
     fallback_fee_rate = plan.estimated_fee_bps / Decimal("10000")

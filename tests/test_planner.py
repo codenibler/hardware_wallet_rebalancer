@@ -137,6 +137,7 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertIn("No rebalancing trades are needed.", message)
         self.assertNotIn("out of balance", message)
+        self.assertNotIn("Estimated total fees", message)
 
     def test_telegram_orders_include_ranked_buy_and_sell_venues(self) -> None:
         plan = build_plan(
