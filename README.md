@@ -146,11 +146,18 @@ python run_rebalancer.py
 ```
 
 When a rebalance or top-up produces orders, that same run checks Bitvavo,
-Kraken Pro, Coinbase Advanced, and OKX Europe. Each order in the Telegram
-report names the recommended venue and its top three alternatives. Buys are
-ranked by the lowest best ask plus taker fee; sells are ranked by the highest
-best bid after taker fee. Venues without enough liquidity at the best quote
-are ranked below venues that can cover the proposed amount.
+Kraken Pro, Coinbase Advanced, OKX Europe, Banxa, Invity, Mercuryo, Anycoin
+Direct, BTC Direct, and MoonPay. Each order in the Telegram report names the
+recommended venue and payment method where applicable, followed by the
+top-three ranking (the recommendation plus two alternatives).
+
+The first four venues are ranked from their live EUR order books: buys use the
+lowest best ask plus taker fee, while sells use the highest best bid after
+taker fee. The other six are amount-specific buy or sell offers returned by
+Invity's comparison service, so embedded provider costs and transaction limits
+are reflected in the effective rate. A provider is skipped for a direction,
+asset, country, amount, or payment method when it does not return a usable
+offer.
 
 This is an outbound-only workflow: run `run_rebalancer.py` and receive the
 combined balance, order, fee, and venue report through Telegram. No `/scan` or
@@ -169,9 +176,20 @@ The defaults in `.env.example` are entry-tier taker-fee assumptions:
 Fee tiers are account-specific and can change. Set
 `HWR_BITVAVO_TAKER_FEE_BPS`, `HWR_KRAKEN_TAKER_FEE_BPS`,
 `HWR_COINBASE_TAKER_FEE_BPS`, and `HWR_OKX_TAKER_FEE_BPS` to the rates shown in
-your accounts. The ranking excludes fiat funding charges, crypto withdrawal
-and network fees, and slippage beyond the displayed best bid or ask. Always
-verify the exchange order preview and current Dutch availability in the
+your accounts. `HWR_QUOTE_COUNTRY` defaults to `NL`. Leave
+`HWR_INVITY_PAYMENT_METHODS` empty to compare all returned payment methods, or
+set a comma-separated allowlist such as `sepa,bankTransfer,iDeal`.
+
+The Invity request follows the
+[open-source Trezor Suite integration](https://github.com/trezor/trezor-suite/blob/develop/suite-common/trading/src/invityAPI.ts):
+the first configured Bitcoin account descriptor is hashed locally and only
+the hash is sent as the comparison identifier. The raw XPUB is never sent to
+Invity. Provider availability and quotes can change without notice.
+
+The ranking includes costs only when exposed by the order book or amount quote.
+It can still exclude separate fiat funding charges, crypto withdrawal and
+network fees, and slippage beyond an order book's displayed best bid or ask.
+Always verify the provider order preview and current Dutch availability in the
 [AFM crypto register](https://www.afm.nl/en/sector/registers/vergunningenregisters/cryptopartijen)
 before trading.
 

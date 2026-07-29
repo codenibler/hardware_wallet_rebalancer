@@ -87,6 +87,12 @@ class CheckArgumentTests(unittest.TestCase):
             build_parser().parse_args(["track", "--start-date", "July 28"])
 
 class TelegramDeliveryTests(unittest.TestCase):
+    @staticmethod
+    def _config():
+        return SimpleNamespace(
+            wallet=SimpleNamespace(bitcoin_xpubs=("xpub-test",))
+        )
+
     def test_check_sends_to_telegram_by_default(self) -> None:
         args = build_parser().parse_args(["check", "--no-prompt"])
         environment = {
@@ -96,7 +102,10 @@ class TelegramDeliveryTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, environment, clear=True),
-            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch(
+                "wallet_rebalancer.cli.load_config",
+                return_value=self._config(),
+            ),
             patch(
                 "wallet_rebalancer.cli._plan_from_args",
                 return_value=object(),
@@ -118,6 +127,7 @@ class TelegramDeliveryTests(unittest.TestCase):
         client_class.return_value.send_message.assert_called_once_with(
             "123456",
             "ordered trades",
+            parse_mode="HTML",
         )
 
     def test_no_telegram_skips_delivery(self) -> None:
@@ -127,7 +137,10 @@ class TelegramDeliveryTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch(
+                "wallet_rebalancer.cli.load_config",
+                return_value=self._config(),
+            ),
             patch(
                 "wallet_rebalancer.cli._plan_from_args",
                 return_value=object(),
@@ -154,7 +167,10 @@ class TelegramDeliveryTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, environment, clear=True),
-            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch(
+                "wallet_rebalancer.cli.load_config",
+                return_value=self._config(),
+            ),
             patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
             patch("wallet_rebalancer.cli.render_text", return_value="report"),
             patch("wallet_rebalancer.cli.ExchangeScanner") as scanner_class,
@@ -168,7 +184,12 @@ class TelegramDeliveryTests(unittest.TestCase):
             scanner_class.return_value.fetch_markets.return_value = venue_snapshot
             self.assertEqual(_check_command(args), 0)
 
-        scanner_class.return_value.fetch_markets.assert_called_once_with()
+        scanner_class.assert_called_once_with(
+            invity_account_descriptor="xpub-test",
+        )
+        scanner_class.return_value.fetch_markets.assert_called_once_with(
+            trades=plan.trades,
+        )
         render_orders.assert_called_once_with(plan, venues=venue_snapshot)
 
     def test_venue_failure_does_not_block_portfolio_message(self) -> None:
@@ -181,7 +202,10 @@ class TelegramDeliveryTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, environment, clear=True),
-            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch(
+                "wallet_rebalancer.cli.load_config",
+                return_value=self._config(),
+            ),
             patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
             patch("wallet_rebalancer.cli.render_text", return_value="report"),
             patch("wallet_rebalancer.cli.ExchangeScanner") as scanner_class,

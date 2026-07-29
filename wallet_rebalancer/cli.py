@@ -297,11 +297,17 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _render_orders_with_venues(plan) -> str:
+def _render_orders_with_venues(
+    plan,
+    *,
+    invity_account_descriptor: str,
+) -> str:
     if not getattr(plan, "trades", ()):
         return render_order_message(plan)
     try:
-        venues = ExchangeScanner().fetch_markets()
+        venues = ExchangeScanner(
+            invity_account_descriptor=invity_account_descriptor,
+        ).fetch_markets(trades=plan.trades)
     except (RuntimeError, ValueError) as exc:
         return render_order_message(plan, venue_error=str(exc))
     return render_order_message(plan, venues=venues)
@@ -322,7 +328,11 @@ def _check_command(args: argparse.Namespace) -> int:
         chat_id = _require_env("TELEGRAM_CHAT_ID")
         TelegramClient(token).send_message(
             chat_id,
-            _render_orders_with_venues(plan),
+            _render_orders_with_venues(
+                plan,
+                invity_account_descriptor=config.wallet.bitcoin_xpubs[0],
+            ),
+            parse_mode="HTML",
         )
     return 0
 
@@ -361,7 +371,8 @@ def _bot_command(args: argparse.Namespace) -> int:
 
     def check_callback(top_up: Decimal) -> str:
         return _render_orders_with_venues(
-            _plan_from_args(args, config, top_up_override=top_up)
+            _plan_from_args(args, config, top_up_override=top_up),
+            invity_account_descriptor=config.wallet.bitcoin_xpubs[0],
         )
 
     print("Telegram bot is running. Press Ctrl-C to stop.")

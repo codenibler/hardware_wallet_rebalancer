@@ -48,8 +48,14 @@ class TelegramClient:
             raise TelegramError(f"Telegram {method} returned an API error")
         return body.get("result")
 
-    def send_message(self, chat_id: int | str, text: str) -> None:
-        """Send plain text, splitting safely below Telegram's message limit."""
+    def send_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+    ) -> None:
+        """Send text, optionally formatted, below Telegram's message limit."""
 
         remaining = text
         while remaining:
@@ -61,10 +67,10 @@ class TelegramClient:
                     split_at = 3900
                 chunk, remaining = remaining[:split_at], remaining[split_at:]
                 remaining = remaining.lstrip("\n")
-            self._call(
-                "sendMessage",
-                payload={"chat_id": chat_id, "text": chunk},
-            )
+            payload: dict[str, object] = {"chat_id": chat_id, "text": chunk}
+            if parse_mode is not None:
+                payload["parse_mode"] = parse_mode
+            self._call("sendMessage", payload=payload)
 
     def get_updates(
         self,
@@ -182,4 +188,4 @@ def run_bot(
             except Exception as exc:  # sanitized domain errors are user-facing
                 client.send_message(chat_id, f"Check failed: {exc}")
                 continue
-            client.send_message(chat_id, order_message)
+            client.send_message(chat_id, order_message, parse_mode="HTML")

@@ -9,8 +9,9 @@ import requests
 from wallet_rebalancer.exchange_scanner import (
     ExchangeScanError,
     ExchangeScanner,
+    INVITY_PROVIDERS,
 )
-from wallet_rebalancer.models import ASSETS
+from wallet_rebalancer.models import ASSETS, TradeInstruction
 
 
 class FakeResponse:
@@ -33,7 +34,11 @@ class FakeSession:
         self.calls = []
 
     def get(self, *args, **kwargs):
-        self.calls.append((args, kwargs))
+        self.calls.append(("GET", args, kwargs))
+        return self.responses.pop(0)
+
+    def post(self, *args, **kwargs):
+        self.calls.append(("POST", args, kwargs))
         return self.responses.pop(0)
 
 
@@ -92,6 +97,34 @@ def _okx_payload():
             }
             for asset in ASSETS
         ],
+    }
+
+
+def _invity_offer(
+    provider: str,
+    *,
+    side: str,
+    fiat_amount: str,
+    payment_method: str = "sepa",
+    payment_method_name: str = "SEPA",
+):
+    crypto_field = (
+        "receiveStringAmount" if side == "BUY" else "cryptoStringAmount"
+    )
+    return {
+        "exchange": (
+            f"{provider}-sell"
+            if side == "SELL" and provider == "btcdirect"
+            else provider
+        ),
+        "fiatCurrency": "EUR",
+        "fiatStringAmount": fiat_amount,
+        crypto_field: "1",
+        "rate": fiat_amount,
+        "minCrypto": "0.1",
+        "maxCrypto": "10",
+        "paymentMethod": payment_method,
+        "paymentMethodName": payment_method_name,
     }
 
 
@@ -164,7 +197,7 @@ class ExchangeScannerTests(unittest.TestCase):
     def test_all_failed_exchanges_raise_sanitized_error(self) -> None:
         session = FakeSession([FakeResponse({}, status_code=500)])
 
-        with self.assertRaisesRegex(ExchangeScanError, "No supported exchange"):
+        with self.assertRaisesRegex(ExchangeScanError, "No supported venue"):
             ExchangeScanner(
                 session=session,
                 exchanges=("bitvavo",),
@@ -197,6 +230,133 @@ class ExchangeScannerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "positive"):
             markets.rank(asset="BTC", side="BUY", amount=Decimal("0"))
+
+    def test_invity_adds_all_requested_broker_providers(self) -> None:
+        buy_offers = [
+            _invity_offer(
+                provider,
+                side="BUY",
+                fiat_amount=str(100 + index),
+            )
+            for index, provider in enumerate(INVITY_PROVIDERS)
+        ]
+        buy_offers.append(
+            _invity_offer(
+                "banxa",
+                side="BUY",
+                fiat_amount="99",
+                payment_method="bankTransfer",
+                payment_method_name="Bank Transfer",
+            )
+        )
+        sell_offers = [
+            _invity_offer(
+                provider,
+                side="SELL",
+                fiat_amount=str(100 - index),
+            )
+            for index, provider in enumerate(INVITY_PROVIDERS)
+        ]
+        session = FakeSession(
+            [FakeResponse(buy_offers), FakeResponse(sell_offers)]
+        )
+        trades = (
+            TradeInstruction(
+                asset="BTC",
+                side="BUY",
+                amount=Decimal("1"),
+                notional_eur=Decimal("100"),
+                snapshot_price_eur=Decimal("100"),
+            ),
+            TradeInstruction(
+                asset="ETH",
+                side="SELL",
+                amount=Decimal("1"),
+                notional_eur=Decimal("100"),
+                snapshot_price_eur=Decimal("100"),
+            ),
+        )
+
+        markets = ExchangeScanner(
+            session=session,
+            exchanges=INVITY_PROVIDERS,
+            invity_account_descriptor="xpub-test",
+        ).fetch_markets(trades=trades)
+
+        self.assertEqual([call[0] for call in session.calls], ["POST", "POST"])
+        self.assertEqual(
+            {quote.exchange_id for quote in markets.quotes["BTC"]},
+            set(INVITY_PROVIDERS),
+        )
+        buy_ranking = markets.rank(
+            asset="BTC",
+            side="BUY",
+            amount=Decimal("1"),
+            limit=6,
+        )
+        self.assertEqual(buy_ranking[0].exchange_id, "banxa")
+        self.assertEqual(
+            buy_ranking[0].exchange_name,
+            "Banxa (Bank Transfer)",
+        )
+        self.assertTrue(buy_ranking[0].fee_included_in_quote)
+        self.assertEqual(buy_ranking[0].supported_sides, frozenset(("BUY",)))
+
+        sell_ranking = markets.rank(
+            asset="ETH",
+            side="SELL",
+            amount=Decimal("1"),
+            limit=6,
+        )
+        self.assertEqual(sell_ranking[0].exchange_id, "banxa")
+        self.assertEqual(
+            {quote.exchange_id for quote in sell_ranking},
+            set(INVITY_PROVIDERS),
+        )
+
+    def test_invity_payment_method_filter_is_applied(self) -> None:
+        offers = [
+            _invity_offer(
+                "moonpay",
+                side="BUY",
+                fiat_amount="90",
+                payment_method="creditCard",
+                payment_method_name="Credit Card",
+            ),
+            _invity_offer(
+                "moonpay",
+                side="BUY",
+                fiat_amount="100",
+                payment_method="sepa",
+                payment_method_name="SEPA",
+            ),
+        ]
+        session = FakeSession([FakeResponse(offers)])
+        trade = TradeInstruction(
+            asset="BTC",
+            side="BUY",
+            amount=Decimal("1"),
+            notional_eur=Decimal("100"),
+            snapshot_price_eur=Decimal("100"),
+        )
+
+        markets = ExchangeScanner(
+            session=session,
+            exchanges=("moonpay",),
+            invity_account_descriptor="xpub-test",
+            payment_methods=("sepa",),
+        ).fetch_markets(trades=(trade,))
+
+        quote = markets.rank(
+            asset="BTC",
+            side="BUY",
+            amount=Decimal("1"),
+        )[0]
+        self.assertEqual(quote.exchange_name, "MoonPay (SEPA)")
+        request_body = session.calls[0][2]["json"]
+        self.assertEqual(request_body["cryptoStringAmount"], "1")
+        self.assertTrue(request_body["wantCrypto"])
+        self.assertNotIn("xpub-test", str(session.calls))
 
 
 if __name__ == "__main__":

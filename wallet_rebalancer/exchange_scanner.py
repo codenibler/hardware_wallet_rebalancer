@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,15 +11,26 @@ from typing import Mapping, Sequence
 
 import requests
 
-from .models import ASSETS, ZERO
+from .models import ASSETS, ZERO, TradeInstruction
 
 
-SUPPORTED_EXCHANGES = ("bitvavo", "kraken", "coinbase", "okx")
+ORDER_BOOK_EXCHANGES = ("bitvavo", "kraken", "coinbase", "okx")
+INVITY_PROVIDER_NAMES = {
+    "banxa": "Banxa",
+    "invity": "Invity",
+    "mercuryo": "Mercuryo",
+    "anycoin": "Anycoin Direct",
+    "btcdirect": "BTC Direct",
+    "moonpay": "MoonPay",
+}
+INVITY_PROVIDERS = tuple(INVITY_PROVIDER_NAMES)
+SUPPORTED_EXCHANGES = ORDER_BOOK_EXCHANGES + INVITY_PROVIDERS
 EXCHANGE_NAMES = {
     "bitvavo": "Bitvavo",
     "kraken": "Kraken Pro",
     "coinbase": "Coinbase Advanced",
     "okx": "OKX Europe",
+    **INVITY_PROVIDER_NAMES,
 }
 DEFAULT_TAKER_FEE_BPS = {
     "bitvavo": Decimal("25"),
@@ -26,6 +38,22 @@ DEFAULT_TAKER_FEE_BPS = {
     "coinbase": Decimal("60"),
     "okx": Decimal("35"),
 }
+INVITY_ASSET_IDS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "LINK": "ethereum--0x514910771af9ca656af840dff83e8264ecf986ca",
+}
+INVITY_TRADE_URLS = {
+    "banxa": "https://banxa.com",
+    "invity": "https://invity.io",
+    "mercuryo": "https://exchange.mercuryo.io",
+    "anycoin": "https://anycoindirect.eu",
+    "btcdirect": "https://btcdirect.eu",
+    "moonpay": "https://www.moonpay.com/buy",
+}
+
+
 class ExchangeScanError(RuntimeError):
     """A sanitized market-data failure."""
 
@@ -59,7 +87,7 @@ def load_taker_fee_bps(
 
     configured: dict[str, Decimal] = {}
     supplied = overrides or {}
-    for exchange in SUPPORTED_EXCHANGES:
+    for exchange in ORDER_BOOK_EXCHANGES:
         environment_name = f"HWR_{exchange.upper()}_TAKER_FEE_BPS"
         raw_value: object = supplied.get(
             exchange,
@@ -88,8 +116,15 @@ class ExchangeQuote:
     taker_fee_bps: Decimal
     quoted_at: datetime
     trade_url: str
+    ask_min_size: Decimal = ZERO
+    bid_min_size: Decimal = ZERO
+    supported_sides: frozenset[str] = frozenset(("BUY", "SELL"))
+    fee_eur_override: Decimal | None = None
+    fee_included_in_quote: bool = False
 
     def effective_unit_price_eur(self, side: str) -> Decimal:
+        if side not in self.supported_sides:
+            raise ValueError(f"{self.exchange_name} does not support {side}")
         fee_rate = self.taker_fee_bps / Decimal("10000")
         if side == "BUY":
             return self.ask_eur * (Decimal("1") + fee_rate)
@@ -98,6 +133,8 @@ class ExchangeQuote:
         raise ValueError("Trade side must be BUY or SELL")
 
     def execution_price_eur(self, side: str) -> Decimal:
+        if side not in self.supported_sides:
+            raise ValueError(f"{self.exchange_name} does not support {side}")
         if side == "BUY":
             return self.ask_eur
         if side == "SELL":
@@ -105,10 +142,17 @@ class ExchangeQuote:
         raise ValueError("Trade side must be BUY or SELL")
 
     def covers(self, side: str, amount: Decimal) -> bool:
-        available = self.ask_size if side == "BUY" else self.bid_size
-        return available >= amount
+        if side not in self.supported_sides:
+            return False
+        if side == "BUY":
+            minimum, available = self.ask_min_size, self.ask_size
+        else:
+            minimum, available = self.bid_min_size, self.bid_size
+        return minimum <= amount <= available
 
     def estimated_fee_eur(self, side: str, amount: Decimal) -> Decimal:
+        if self.fee_eur_override is not None:
+            return self.fee_eur_override
         return (
             amount
             * self.execution_price_eur(side)
@@ -126,13 +170,17 @@ class ExchangeQuote:
             "ask_size": str(self.ask_size),
             "bid_eur": str(self.bid_eur),
             "bid_size": str(self.bid_size),
+            "ask_min_size": str(self.ask_min_size),
+            "bid_min_size": str(self.bid_min_size),
             "taker_fee_bps": str(self.taker_fee_bps),
+            "supported_sides": sorted(self.supported_sides),
             "side": side,
             "trade_amount": str(amount),
             "effective_unit_price_eur": str(
                 self.effective_unit_price_eur(side)
             ),
             "estimated_fee_eur": str(self.estimated_fee_eur(side, amount)),
+            "fee_included_in_quote": self.fee_included_in_quote,
             "covers_trade_at_best_quote": self.covers(side, amount),
             "quoted_at": _iso(self.quoted_at),
             "trade_url": self.trade_url,
@@ -170,7 +218,14 @@ class VenueMarketSnapshot:
             )
 
         return tuple(
-            sorted(self.quotes.get(asset, ()), key=sort_key)[:limit]
+            sorted(
+                (
+                    quote
+                    for quote in self.quotes.get(asset, ())
+                    if side in quote.supported_sides
+                ),
+                key=sort_key,
+            )[:limit]
         )
 
 
@@ -184,6 +239,9 @@ class ExchangeScanner:
         timeout_seconds: float = 12.0,
         exchanges: Sequence[str] = SUPPORTED_EXCHANGES,
         taker_fee_bps: Mapping[str, Decimal | str | int | float] | None = None,
+        invity_account_descriptor: str | None = None,
+        country: str | None = None,
+        payment_methods: Sequence[str] | None = None,
     ) -> None:
         unknown = sorted(set(exchanges) - set(SUPPORTED_EXCHANGES))
         if unknown:
@@ -194,6 +252,25 @@ class ExchangeScanner:
         self.fees = load_taker_fee_bps(taker_fee_bps)
         self.session = session or requests.Session()
         self.timeout_seconds = timeout_seconds
+        descriptor = (invity_account_descriptor or "").strip()
+        self.invity_api_key = (
+            hashlib.sha256(descriptor.encode("utf-8")).hexdigest()
+            if descriptor
+            else None
+        )
+        self.country = (
+            country or os.getenv("HWR_QUOTE_COUNTRY", "NL")
+        ).strip().upper()
+        if len(self.country) != 2 or not self.country.isalpha():
+            raise ValueError("HWR_QUOTE_COUNTRY must be a two-letter country code")
+        if payment_methods is None:
+            configured_methods = os.getenv("HWR_INVITY_PAYMENT_METHODS", "")
+            payment_methods = configured_methods.split(",")
+        self.payment_methods = frozenset(
+            method.strip().lower()
+            for method in payment_methods
+            if method.strip()
+        )
         self.session.headers.update(
             {
                 "User-Agent": (
@@ -221,6 +298,26 @@ class ExchangeScanner:
             return response.json()
         except (requests.RequestException, ValueError) as exc:
             raise _VenueError(f"{label} market-data request failed") from exc
+
+    def _post_json(
+        self,
+        url: str,
+        *,
+        body: Mapping[str, object],
+        headers: Mapping[str, str] | None = None,
+        label: str,
+    ) -> object:
+        try:
+            response = self.session.post(
+                url,
+                json=body,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise _VenueError(f"{label} quote request failed") from exc
 
     def _quote(
         self,
@@ -475,7 +572,224 @@ class ExchangeScanner:
                     failures.append(f"{label} {asset}/EUR has an invalid timestamp")
         return quotes, failures
 
-    def fetch_markets(self) -> VenueMarketSnapshot:
+    def _invity_headers(self) -> dict[str, str]:
+        if self.invity_api_key is None:
+            raise _VenueError("Invity quote comparison is not configured")
+        trace_id = hashlib.sha256(
+            self.invity_api_key.encode("ascii")
+        ).hexdigest()
+        return {
+            "X-SuiteA-Api": self.invity_api_key,
+            "X-Trace-Id": trace_id,
+        }
+
+    @staticmethod
+    def _invity_provider_id(raw_exchange: object) -> str:
+        provider = str(raw_exchange).lower()
+        return (
+            provider[: -len("-sell")]
+            if provider.endswith("-sell")
+            else provider
+        )
+
+    def _invity_quote(
+        self,
+        *,
+        asset: str,
+        side: str,
+        offer: Mapping[str, object],
+        requested_amount: Decimal,
+    ) -> ExchangeQuote:
+        provider = self._invity_provider_id(offer.get("exchange"))
+        if provider not in INVITY_PROVIDER_NAMES:
+            raise _VenueError("Invity returned an unknown provider")
+
+        fiat_amount = _decimal(
+            offer.get("fiatStringAmount"),
+            INVITY_PROVIDER_NAMES[provider],
+        )
+        crypto_field = (
+            "receiveStringAmount" if side == "BUY" else "cryptoStringAmount"
+        )
+        crypto_amount = _decimal(
+            offer.get(crypto_field),
+            INVITY_PROVIDER_NAMES[provider],
+        )
+        if fiat_amount <= ZERO or crypto_amount <= ZERO:
+            raise _VenueError(
+                f"{INVITY_PROVIDER_NAMES[provider]} returned an unusable quote"
+            )
+
+        effective_price = fiat_amount / crypto_amount
+        market_rate = _decimal(
+            offer.get("rate") or effective_price,
+            INVITY_PROVIDER_NAMES[provider],
+        )
+        if market_rate <= ZERO:
+            market_rate = effective_price
+        if side == "BUY":
+            included_fee = fiat_amount - (crypto_amount * market_rate)
+        else:
+            included_fee = (crypto_amount * market_rate) - fiat_amount
+        included_fee = max(included_fee, ZERO)
+
+        minimum = _decimal(
+            offer.get("minCrypto") or ZERO,
+            INVITY_PROVIDER_NAMES[provider],
+        )
+        maximum = _decimal(
+            offer.get("maxCrypto") or requested_amount,
+            INVITY_PROVIDER_NAMES[provider],
+        )
+        if minimum < ZERO or maximum <= ZERO or minimum > maximum:
+            raise _VenueError(
+                f"{INVITY_PROVIDER_NAMES[provider]} returned invalid limits"
+            )
+
+        payment_method = str(
+            offer.get("paymentMethodName")
+            or offer.get("paymentMethod")
+            or ""
+        ).strip()
+        exchange_name = INVITY_PROVIDER_NAMES[provider]
+        if payment_method:
+            exchange_name = f"{exchange_name} ({payment_method})"
+
+        side_set = frozenset((side,))
+        if side == "BUY":
+            ask_min_size, ask_size = minimum, maximum
+            bid_min_size, bid_size = ZERO, ZERO
+        else:
+            ask_min_size, ask_size = ZERO, ZERO
+            bid_min_size, bid_size = minimum, maximum
+
+        return ExchangeQuote(
+            asset=asset,
+            exchange_id=provider,
+            exchange_name=exchange_name,
+            pair=f"{asset}-EUR",
+            ask_eur=effective_price,
+            ask_size=ask_size,
+            bid_eur=effective_price,
+            bid_size=bid_size,
+            taker_fee_bps=ZERO,
+            quoted_at=_utc_now(),
+            trade_url=INVITY_TRADE_URLS[provider],
+            ask_min_size=ask_min_size,
+            bid_min_size=bid_min_size,
+            supported_sides=side_set,
+            fee_eur_override=included_fee,
+            fee_included_in_quote=True,
+        )
+
+    def _fetch_invity(
+        self,
+        trades: Sequence[TradeInstruction],
+        providers: frozenset[str],
+    ) -> tuple[list[ExchangeQuote], list[str]]:
+        headers = self._invity_headers()
+        quotes: list[ExchangeQuote] = []
+        failures: list[str] = []
+
+        for trade in trades:
+            crypto_id = INVITY_ASSET_IDS[trade.asset]
+            if trade.side == "BUY":
+                endpoint = "https://exchange.trezor.io/api/v3/buy/quotes"
+                body: dict[str, object] = {
+                    "receiveCurrency": crypto_id,
+                    "fiatCurrency": "EUR",
+                    "cryptoStringAmount": str(trade.amount),
+                    "wantCrypto": True,
+                    "country": self.country,
+                }
+            else:
+                endpoint = (
+                    "https://exchange.trezor.io/api/v3/sell/fiat/quotes"
+                )
+                body = {
+                    "cryptoCurrency": crypto_id,
+                    "fiatCurrency": "EUR",
+                    "cryptoStringAmount": str(trade.amount),
+                    "amountInCrypto": True,
+                    "country": self.country,
+                    "flows": ["BANK_ACCOUNT", "PAYMENT_GATE"],
+                }
+
+            data = self._post_json(
+                endpoint,
+                body=body,
+                headers=headers,
+                label=f"Invity {trade.asset} {trade.side.lower()}",
+            )
+            if not isinstance(data, list):
+                failures.append(
+                    f"Invity {trade.asset} returned an unexpected response"
+                )
+                continue
+
+            candidates: dict[str, list[ExchangeQuote]] = {
+                provider: [] for provider in providers
+            }
+            for raw_offer in data:
+                if not isinstance(raw_offer, dict) or raw_offer.get("error"):
+                    continue
+                provider = self._invity_provider_id(
+                    raw_offer.get("exchange")
+                )
+                if provider not in providers:
+                    continue
+                method = str(raw_offer.get("paymentMethod", "")).lower()
+                if self.payment_methods and method not in self.payment_methods:
+                    continue
+                try:
+                    candidates[provider].append(
+                        self._invity_quote(
+                            asset=trade.asset,
+                            side=trade.side,
+                            offer=raw_offer,
+                            requested_amount=trade.amount,
+                        )
+                    )
+                except _VenueError as exc:
+                    failures.append(str(exc))
+
+            for provider, provider_quotes in candidates.items():
+                usable = [
+                    quote
+                    for quote in provider_quotes
+                    if quote.covers(trade.side, trade.amount)
+                ]
+                pool = usable or provider_quotes
+                if not pool:
+                    failures.append(
+                        f"{INVITY_PROVIDER_NAMES[provider]} did not return a "
+                        f"usable {trade.asset} {trade.side.lower()} quote"
+                    )
+                    continue
+                best = (
+                    min(
+                        pool,
+                        key=lambda quote: quote.effective_unit_price_eur(
+                            trade.side
+                        ),
+                    )
+                    if trade.side == "BUY"
+                    else max(
+                        pool,
+                        key=lambda quote: quote.effective_unit_price_eur(
+                            trade.side
+                        ),
+                    )
+                )
+                quotes.append(best)
+
+        return quotes, failures
+
+    def fetch_markets(
+        self,
+        *,
+        trades: Sequence[TradeInstruction] = (),
+    ) -> VenueMarketSnapshot:
         """Fetch one reusable market snapshot for all proposed orders."""
 
         fetchers = {
@@ -487,6 +801,8 @@ class ExchangeScanner:
         quotes: list[ExchangeQuote] = []
         failures: list[str] = []
         for exchange in self.exchanges:
+            if exchange in INVITY_PROVIDERS:
+                continue
             try:
                 venue_quotes, venue_failures = fetchers[exchange]()
                 quotes.extend(venue_quotes)
@@ -494,9 +810,23 @@ class ExchangeScanner:
             except _VenueError as exc:
                 failures.append(str(exc))
 
+        requested_invity_providers = frozenset(self.exchanges) & frozenset(
+            INVITY_PROVIDERS
+        )
+        if requested_invity_providers and trades:
+            try:
+                venue_quotes, venue_failures = self._fetch_invity(
+                    trades,
+                    requested_invity_providers,
+                )
+                quotes.extend(venue_quotes)
+                failures.extend(venue_failures)
+            except _VenueError as exc:
+                failures.append(str(exc))
+
         if not quotes:
             raise ExchangeScanError(
-                "No supported exchange returned a usable EUR spot quote"
+                "No supported venue returned a usable EUR quote"
             )
 
         return VenueMarketSnapshot(

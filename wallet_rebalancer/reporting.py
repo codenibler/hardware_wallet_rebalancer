@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 import json
 from decimal import Decimal
 from typing import Any
@@ -213,12 +214,10 @@ def render_order_message(
     fallback_fee_rate = plan.estimated_fee_bps / Decimal("10000")
     recommended_fees = ZERO
     ranked_trade_count = 0
+    inclusive_fee_count = 0
+    order_lines = ["These are the planned orders (not submitted):", ""]
     for trade in plan.trades:
         marker = "🔴" if trade.side == "SELL" else "🟢"
-        if plan.threshold_rebalance_needed:
-            reason = f"rebalance {trade.side.lower()}"
-        else:
-            reason = "top-up allocation"
 
         ranking = (
             venues.rank(
@@ -232,20 +231,33 @@ def render_order_message(
         if ranking:
             best = ranking[0]
             trade_fee = best.estimated_fee_eur(trade.side, trade.amount)
+            displayed_notional = (
+                best.execution_price_eur(trade.side) * trade.amount
+            )
             recommended_fees += trade_fee
             ranked_trade_count += 1
             venue_text = f", venue={best.exchange_name}"
+            if best.fee_included_in_quote:
+                inclusive_fee_count += 1
+                fee_text = (
+                    f"fee≈{_money(trade_fee)} included"
+                    if trade_fee > ZERO
+                    else "fee=included in quote"
+                )
+            else:
+                fee_text = f"fee≈{_money(trade_fee)}"
         else:
             trade_fee = trade.notional_eur * fallback_fee_rate
+            displayed_notional = trade.notional_eur
             venue_text = ""
+            fee_text = f"fee≈{_money(trade_fee)}"
 
-        lines.append(
+        order_lines.append(
             f"{marker} {trade.asset}, "
             f"{_amount(trade.asset, trade.amount)} {trade.asset}, "
-            f"{_money(trade.notional_eur)}, "
-            f"fee≈{_money(trade_fee)}"
-            f"{venue_text}, "
-            f"reason={reason}"
+            f"{_money(displayed_notional)}, "
+            f"{fee_text}"
+            f"{venue_text}"
         )
         if ranking:
             price_label = "all-in" if trade.side == "BUY" else "net"
@@ -254,7 +266,7 @@ def render_order_message(
                 shallow = (
                     ""
                     if quote.covers(trade.side, trade.amount)
-                    else " (shallow)"
+                    else " (outside limits)"
                 )
                 alternatives.append(
                     f"{index}) {quote.exchange_name} "
@@ -262,9 +274,17 @@ def render_order_message(
                     f"{_money(quote.effective_unit_price_eur(trade.side))}"
                     f"/{trade.asset}{shallow}"
                 )
-            lines.append("   Top venues: " + " | ".join(alternatives))
+            order_lines.append("   Top venues: " + " | ".join(alternatives))
 
-    if ranked_trade_count == len(plan.trades):
+    lines.append(f"<pre>{escape(chr(10).join(order_lines))}</pre>")
+
+    if ranked_trade_count == len(plan.trades) and inclusive_fee_count:
+        total_fee_text = (
+            "Separately identifiable fees: "
+            f"{_money(recommended_fees)}. Provider-inclusive costs are already "
+            "reflected in the ranked rates."
+        )
+    elif ranked_trade_count == len(plan.trades):
         total_fee_text = (
             f"Estimated total trading fees: {_money(recommended_fees)} "
             "(recommended venues)"
@@ -282,8 +302,10 @@ def render_order_message(
     )
     if venues is not None:
         lines.append(
-            "Venue rankings use live top-of-book EUR quotes and exclude "
-            "funding, withdrawal, and network fees."
+            "Venue rankings compare live fee-adjusted EUR order books with "
+            "amount-specific provider quotes. Costs are included only when "
+            "returned by the venue; verify funding, withdrawal, and network "
+            "fees before trading."
         )
         if venues.failures:
             lines.append(
@@ -291,7 +313,9 @@ def render_order_message(
                 "quote(s) were skipped."
             )
     elif venue_error:
-        lines.append(f"Venue comparison unavailable: {venue_error}")
+        lines.append(
+            f"Venue comparison unavailable: {escape(venue_error)}"
+        )
     return "\n".join(lines)
 
 
