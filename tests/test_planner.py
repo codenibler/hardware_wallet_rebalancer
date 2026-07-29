@@ -59,18 +59,19 @@ class PlannerTests(unittest.TestCase):
         order_lines = render_order_message(plan).splitlines()
         self.assertEqual(
             order_lines[0],
-            "These are the planned orders (not submitted):",
+            "Greetings cryptopian. It seems your portfolio is out of balance.",
         )
-        self.assertTrue(order_lines[1].startswith("🔴 BTC,"))
-        self.assertTrue(order_lines[2].startswith("🟢 ETH,"))
-        self.assertTrue(order_lines[3].startswith("🟢 LINK,"))
-        self.assertTrue(order_lines[4].startswith("🟢 SOL,"))
+        self.assertIn("has reached or exceeded the 5.00% threshold", order_lines[2])
+        self.assertTrue(order_lines[4].startswith("🔴 BTC,"))
+        self.assertTrue(order_lines[5].startswith("🟢 ETH,"))
+        self.assertTrue(order_lines[6].startswith("🟢 LINK,"))
+        self.assertTrue(order_lines[7].startswith("🟢 SOL,"))
         self.assertIn(
             "€300.00, fee≈€0.00, reason=rebalance sell",
-            order_lines[1],
+            order_lines[4],
         )
         self.assertTrue(
-            all("reason=rebalance buy" in line for line in order_lines[2:-1])
+            all("reason=rebalance buy" in line for line in order_lines[5:-1])
         )
         self.assertTrue(order_lines[-1].startswith("Estimated total fees:"))
 
@@ -100,8 +101,33 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertIn("TOP-UP PLAN AVAILABLE", render_text(plan))
         top_up_message = render_order_message(plan)
+        self.assertIn("Your portfolio is in balance", top_up_message)
+        self.assertIn("no threshold rebalance is needed", top_up_message)
         self.assertIn("reason=top-up allocation", top_up_message)
         self.assertNotIn("🔴", top_up_message)
+
+    def test_balanced_telegram_message_says_no_rebalance_is_needed(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            threshold="0.05",
+            estimated_fee_bps="50",
+        )
+
+        message = render_order_message(plan)
+        self.assertIn(
+            "Greetings cryptopian. Your portfolio is in balance.",
+            message,
+        )
+        self.assertIn(
+            "The divergence of 0.00% is below the 5.00% threshold.",
+            message,
+        )
+        self.assertIn("No rebalancing trades are needed.", message)
+        self.assertNotIn("out of balance", message)
 
     def test_top_up_required_for_buy_only_is_calculated(self) -> None:
         plan = build_plan(

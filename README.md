@@ -26,6 +26,7 @@ a recovery seed, PIN, passphrase, or private key.
 - Interactive top-up input for new EUR capital.
 - Human-readable and JSON output.
 - Default ordered Telegram delivery and an allowlisted `/check [top_up]` bot.
+- Persistent rebalancing-vs-buy-and-hold performance tracking and SVG charts.
 - Deterministic offline demo and unit tests.
 
 No automatic trade execution is included by design.
@@ -92,6 +93,47 @@ python run_rebalancer.py \
 ```
 
 Enter `1000` when prompted to reproduce the top-up example.
+
+## Rebalancing performance tracking
+
+After a rebalance has actually been completed and the wallet balances reflect
+the completed trades, run:
+
+```bash
+python tracking.py --note "Completed threshold rebalance"
+```
+
+The first run freezes the current BTC, ETH, SOL, and LINK units as a
+buy-and-hold benchmark dated July 28, 2026. Every later run:
+
+1. fetches the real holdings and current EUR prices;
+2. values the real, rebalanced portfolio;
+3. values the original fixed asset units at exactly the same prices;
+4. appends both results to `reports/portfolio_tracking.json`;
+5. refreshes `reports/portfolio_value.svg`,
+   `reports/portfolio_returns.svg`, and
+   `reports/portfolio_performance.csv`.
+
+The terminal summary states which strategy is ahead, the euro difference,
+cumulative returns, and rebalancing outperformance in percentage points.
+Run this command only after completed trades, not merely after viewing an
+indicative rebalance plan.
+
+To initialize or test the tracker from exact July 28 snapshots without making
+provider calls:
+
+```bash
+python tracking.py \
+  --holdings-file examples/demo_holdings.json \
+  --prices-file examples/demo_prices.json \
+  --note "Initial July 28 allocation"
+```
+
+On a new installation, the first supplied holdings and prices define the
+starting capital and immutable benchmark units. The `reports/` directory is
+intentionally ignored by Git because it contains portfolio history; back it up
+privately. Direct value/return comparisons assume no unrecorded deposits or
+withdrawals after initialization.
 
 ## Telegram
 

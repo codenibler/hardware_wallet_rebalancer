@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Sequence
@@ -19,6 +19,13 @@ from .planner import build_plan
 from .providers import ProviderError, PublicDataClient
 from .reporting import render_json, render_order_message, render_text
 from .telegram import TelegramClient, discover_chats, run_bot
+from .tracking import (
+    DEFAULT_CHART_DIR,
+    DEFAULT_DATA_PATH,
+    DEFAULT_START_DATE,
+    record_rebalance,
+    render_performance,
+)
 
 
 def _non_negative_decimal(value: str) -> Decimal:
@@ -71,6 +78,13 @@ def _parse_datetime(value: object, label: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must use YYYY-MM-DD format") from exc
+
+
 def _load_holdings_snapshot(path: Path) -> Holdings:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -115,17 +129,7 @@ def _plan_from_args(
     *,
     top_up_override: Decimal | None = None,
 ):
-    client = PublicDataClient(config)
-    holdings = (
-        _load_holdings_snapshot(args.holdings_file)
-        if getattr(args, "holdings_file", None)
-        else client.fetch_holdings()
-    )
-    prices = (
-        _load_price_snapshot(args.prices_file)
-        if getattr(args, "prices_file", None)
-        else client.fetch_prices()
-    )
+    holdings, prices = _portfolio_inputs(args, config)
     threshold = (
         args.threshold
         if getattr(args, "threshold", None) is not None
@@ -149,6 +153,24 @@ def _plan_from_args(
         estimated_fee_bps=fee_bps,
         target_weights=config.policy.target_weights,
     )
+
+
+def _portfolio_inputs(
+    args: argparse.Namespace,
+    config: AppConfig,
+) -> tuple[Holdings, PriceBook]:
+    client = PublicDataClient(config)
+    holdings = (
+        _load_holdings_snapshot(args.holdings_file)
+        if getattr(args, "holdings_file", None)
+        else client.fetch_holdings()
+    )
+    prices = (
+        _load_price_snapshot(args.prices_file)
+        if getattr(args, "prices_file", None)
+        else client.fetch_prices()
+    )
+    return holdings, prices
 
 
 def _add_policy_args(parser: argparse.ArgumentParser) -> None:
@@ -217,6 +239,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run allowlisted Telegram /check long polling",
     )
     _add_policy_args(bot)
+
+    track = subparsers.add_parser(
+        "track",
+        help="Record a completed rebalance and update performance charts",
+    )
+    track.add_argument(
+        "--holdings-file",
+        type=Path,
+        help="Use a local JSON amount snapshot instead of live balances",
+    )
+    track.add_argument(
+        "--prices-file",
+        type=Path,
+        help="Use a local JSON price snapshot instead of CoinGecko",
+    )
+    track.add_argument(
+        "--start-date",
+        type=_parse_date,
+        default=DEFAULT_START_DATE,
+        help=(
+            "Buy-and-hold benchmark start in YYYY-MM-DD format "
+            f"(default: {DEFAULT_START_DATE})"
+        ),
+    )
+    track.add_argument(
+        "--data-file",
+        type=Path,
+        default=DEFAULT_DATA_PATH,
+        help=f"Persistent tracking JSON (default: {DEFAULT_DATA_PATH})",
+    )
+    track.add_argument(
+        "--charts-dir",
+        type=Path,
+        default=DEFAULT_CHART_DIR,
+        help=f"Chart and CSV output directory (default: {DEFAULT_CHART_DIR})",
+    )
+    track.add_argument(
+        "--note",
+        default="",
+        help="Optional one-line description of this completed rebalance",
+    )
+    track.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the latest performance summary as JSON",
+    )
     return parser
 
 
@@ -293,6 +361,24 @@ def _bot_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _track_command(args: argparse.Namespace) -> int:
+    config = load_config()
+    holdings, prices = _portfolio_inputs(args, config)
+    summary = record_rebalance(
+        holdings,
+        prices,
+        data_path=args.data_file,
+        chart_dir=args.charts_dir,
+        start_date=args.start_date,
+        note=args.note,
+    )
+    if args.json:
+        print(json.dumps(summary.to_dict(), indent=2))
+    else:
+        print(render_performance(summary))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
@@ -303,6 +389,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _discover_command(args)
         if args.command == "bot":
             return _bot_command(args)
+        if args.command == "track":
+            return _track_command(args)
         raise AssertionError("unreachable")
     except (
         FileNotFoundError,

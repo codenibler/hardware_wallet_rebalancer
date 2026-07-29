@@ -67,6 +67,20 @@ class CheckArgumentTests(unittest.TestCase):
         ):
             build_parser().parse_args(["check", "--fee-bps", "0"])
 
+    def test_track_defaults_to_july_28_benchmark(self) -> None:
+        args = build_parser().parse_args(["track"])
+
+        self.assertEqual(args.start_date.isoformat(), "2026-07-28")
+        self.assertEqual(str(args.data_file), "reports/portfolio_tracking.json")
+        self.assertEqual(str(args.charts_dir), "reports")
+
+    def test_track_start_date_requires_iso_format(self) -> None:
+        with (
+            patch("sys.stderr", new_callable=io.StringIO),
+            self.assertRaises(SystemExit),
+        ):
+            build_parser().parse_args(["track", "--start-date", "July 28"])
+
 
 class TelegramDeliveryTests(unittest.TestCase):
     def test_check_sends_to_telegram_by_default(self) -> None:

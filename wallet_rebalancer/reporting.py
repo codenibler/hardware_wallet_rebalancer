@@ -150,11 +150,45 @@ def render_text(plan: PortfolioPlan) -> str:
 def render_order_message(plan: PortfolioPlan) -> str:
     """Render an ordered Telegram list of proposed trades."""
 
-    lines = ["These are the planned orders (not submitted):"]
+    if plan.threshold_rebalance_needed:
+        lines = [
+            "Greetings cryptopian. It seems your portfolio is out of balance.",
+            "",
+            (
+                f"The divergence of {_percent(plan.max_abs_drift)} has reached "
+                f"or exceeded the {_percent(plan.threshold)} threshold. This is "
+                "how to return it to the desired state using the configured "
+                "fee estimate."
+            ),
+            "",
+        ]
+    elif plan.has_top_up:
+        lines = [
+            "Greetings cryptopian. Your portfolio is in balance.",
+            "",
+            (
+                f"The divergence of {_percent(plan.max_abs_drift)} is below the "
+                f"{_percent(plan.threshold)} threshold, so no threshold "
+                "rebalance is needed. This is how to invest the new capital "
+                "while returning to the desired allocation."
+            ),
+            "",
+        ]
+    else:
+        lines = [
+            "Greetings cryptopian. Your portfolio is in balance.",
+            "",
+            (
+                f"The divergence of {_percent(plan.max_abs_drift)} is below the "
+                f"{_percent(plan.threshold)} threshold. No rebalancing trades "
+                "are needed."
+            ),
+        ]
+
     if not plan.has_trade_plan or not plan.trades:
         lines.extend(
             [
-                "No planned orders.",
+                "",
                 (
                     f"Estimated total fees: {_money(plan.estimated_fees_eur)} "
                     f"({plan.estimated_fee_bps} bps assumption)"
