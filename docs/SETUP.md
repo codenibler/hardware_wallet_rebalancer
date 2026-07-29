@@ -133,7 +133,7 @@ Blockbook's canonical V2 interface is documented in its
 
 ```bash
 python -m unittest discover -v
-python run_rebalancer.py \
+python main.py \
   --holdings-file examples/demo_holdings.json \
   --prices-file examples/demo_prices.json \
   --no-telegram
@@ -144,8 +144,8 @@ Enter `1000` at the prompt for the example top-up, or press Enter for zero.
 ## 6. First live run
 
 ```bash
-python run_rebalancer.py --json
-python run_rebalancer.py
+python main.py --json
+python main.py
 ```
 
 Both commands ask for the new EUR top-up amount. Press Enter to use zero.
@@ -169,7 +169,7 @@ Every normal check sends an ordered one-shot notification with red SELL lines
 first and green BUY lines afterward:
 
 ```bash
-python run_rebalancer.py
+python main.py
 ```
 
 Enter the new EUR top-up amount when prompted. Use `--no-telegram` only when

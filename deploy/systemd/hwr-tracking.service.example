@@ -1,5 +1,5 @@
 [Unit]
-Description=Send hardware wallet rebalance report
+Description=Update hardware wallet strategy performance analytics
 After=network-online.target
 Wants=network-online.target
 
@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/Projects/hardware_wallet_rebalancer
 EnvironmentFile=%h/Projects/hardware_wallet_rebalancer/.env
-ExecStart=%h/Projects/hardware_wallet_rebalancer/.venv/bin/python main.py --no-prompt
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/Projects/hardware_wallet_rebalancer/.venv/bin/python tracking.py --note "Daily scheduled snapshot"
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

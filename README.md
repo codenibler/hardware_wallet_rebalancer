@@ -44,9 +44,9 @@ cp .env.example .env
 Fill `.env` using [the export instructions](docs/SETUP.md), then run:
 
 ```bash
-python run_rebalancer.py
-python run_rebalancer.py --fee-bps 75
-python run_rebalancer.py --json
+python main.py
+python main.py --fee-bps 75
+python main.py --json
 ```
 
 Each check asks:
@@ -87,7 +87,7 @@ top-up deployment plan.
 The demo makes no provider or wallet calls:
 
 ```bash
-python run_rebalancer.py \
+python main.py \
   --holdings-file examples/demo_holdings.json \
   --prices-file examples/demo_prices.json \
   --no-telegram
@@ -136,13 +136,35 @@ intentionally ignored by Git because it contains portfolio history; back it up
 privately. Direct value/return comparisons assume no unrecorded deposits or
 withdrawals after initialization.
 
+### Daily scheduled tracking
+
+The installed user timer records a performance observation every day at 20:00
+Europe/Amsterdam:
+
+```bash
+systemctl --user status hwr-tracking.timer
+systemctl --user list-timers hwr-tracking.timer
+journalctl --user -u hwr-tracking.service
+```
+
+`Persistent=true` causes a missed run to be performed after the computer and
+user session become available again. To change the time, edit
+`~/.config/systemd/user/hwr-tracking.timer`, then run:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart hwr-tracking.timer
+```
+
+The reusable unit templates are in `deploy/systemd/`.
+
 ## Automatic Dutch exchange comparison
 
 The normal rebalancer run now compares direct EUR spot order books
 automatically:
 
 ```bash
-python run_rebalancer.py
+python main.py
 ```
 
 When a rebalance or top-up produces orders, that same run checks Bitvavo,
@@ -159,7 +181,7 @@ are reflected in the effective rate. A provider is skipped for a direction,
 asset, country, amount, or payment method when it does not return a usable
 offer.
 
-This is an outbound-only workflow: run `run_rebalancer.py` and receive the
+This is an outbound-only workflow: run `main.py` and receive the
 combined balance, order, fee, and venue report through Telegram. No `/scan` or
 other incoming bot message is required.
 
@@ -210,7 +232,7 @@ python -m wallet_rebalancer discover-telegram
 For one-shot delivery, run the normal check:
 
 ```bash
-python run_rebalancer.py
+python main.py
 ```
 
 Enter the top-up when prompted; the report is sent automatically.
@@ -223,7 +245,7 @@ python -m wallet_rebalancer bot
 
 Then send `/check` or `/check 1000`. Bot mode refuses to start without
 `TELEGRAM_ALLOWED_CHAT_IDS`. This optional polling mode is not needed for the
-normal outbound-only `run_rebalancer.py` workflow.
+normal outbound-only `main.py` workflow.
 
 If a bot token has ever appeared in chat, source control, logs, or screenshots,
 revoke it in BotFather and generate a new one before use.
