@@ -11,6 +11,7 @@ from unittest.mock import patch
 from wallet_rebalancer.cli import (
     _check_command,
     _prompt_top_up,
+    _track_command,
     build_parser,
 )
 
@@ -78,6 +79,22 @@ class CheckArgumentTests(unittest.TestCase):
         self.assertEqual(args.start_date.isoformat(), "2026-07-28")
         self.assertEqual(str(args.data_file), "reports/portfolio_tracking.json")
         self.assertEqual(str(args.charts_dir), "reports")
+        self.assertEqual(args.deposit_eur, Decimal("0"))
+        self.assertIsNone(args.deposit_fee_bps)
+
+    def test_track_accepts_completed_deposit_and_fee_rate(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "track",
+                "--deposit-eur",
+                "1000",
+                "--deposit-fee-bps",
+                "50",
+            ]
+        )
+
+        self.assertEqual(args.deposit_eur, Decimal("1000"))
+        self.assertEqual(args.deposit_fee_bps, Decimal("50"))
 
     def test_track_start_date_requires_iso_format(self) -> None:
         with (
@@ -85,6 +102,54 @@ class CheckArgumentTests(unittest.TestCase):
             self.assertRaises(SystemExit),
         ):
             build_parser().parse_args(["track", "--start-date", "July 28"])
+
+
+class TrackingCommandTests(unittest.TestCase):
+    def test_deposit_uses_configured_fee_rate_by_default(self) -> None:
+        args = build_parser().parse_args(
+            ["track", "--deposit-eur", "1000", "--json"]
+        )
+        config = SimpleNamespace(
+            policy=SimpleNamespace(estimated_fee_bps=Decimal("50"))
+        )
+        summary = SimpleNamespace(to_dict=lambda: {"ok": True})
+
+        with (
+            patch("wallet_rebalancer.cli.load_config", return_value=config),
+            patch(
+                "wallet_rebalancer.cli._portfolio_inputs",
+                return_value=(object(), object()),
+            ),
+            patch(
+                "wallet_rebalancer.cli.record_rebalance",
+                return_value=summary,
+            ) as record,
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertEqual(_track_command(args), 0)
+
+        self.assertEqual(record.call_args.kwargs["deposit_eur"], Decimal("1000"))
+        self.assertEqual(
+            record.call_args.kwargs["deposit_fee_bps"],
+            Decimal("50"),
+        )
+
+    def test_deposit_fee_requires_a_deposit(self) -> None:
+        args = build_parser().parse_args(["track", "--deposit-fee-bps", "50"])
+        config = SimpleNamespace(
+            policy=SimpleNamespace(estimated_fee_bps=Decimal("50"))
+        )
+
+        with (
+            patch("wallet_rebalancer.cli.load_config", return_value=config),
+            patch(
+                "wallet_rebalancer.cli._portfolio_inputs",
+                return_value=(object(), object()),
+            ),
+            self.assertRaisesRegex(ValueError, "--deposit-eur"),
+        ):
+            _track_command(args)
+
 
 class TelegramDeliveryTests(unittest.TestCase):
     @staticmethod

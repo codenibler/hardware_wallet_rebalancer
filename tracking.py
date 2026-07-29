@@ -1,4 +1,4 @@
-"""Record a completed rebalance and compare it with buy-and-hold."""
+"""Record a portfolio snapshot and compare it with buy-and-hold."""
 
 from __future__ import annotations
 

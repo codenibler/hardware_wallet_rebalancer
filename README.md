@@ -101,11 +101,12 @@ After the initial portfolio snapshot or a completed rebalance, run:
 python tracking.py --note "Completed rebalance"
 ```
 
-The first run freezes the supplied coin quantities as the July 28, 2026
-buy-and-hold benchmark. Later runs value:
+The first run freezes the supplied coin quantities and allocation as the
+July 28, 2026 buy-and-hold benchmark. Later runs value:
 
 1. the latest real wallet balances; and
-2. those original fixed benchmark quantities;
+2. the benchmark quantities that have been bought and held without
+   rebalancing;
 
 using the same price snapshot. Results are written to:
 
@@ -114,10 +115,24 @@ using the same price snapshot. Results are written to:
 - `reports/portfolio_value.svg`
 - `reports/portfolio_returns.svg`
 
-The tracker currently assumes no deposits or withdrawals after initialization.
-It does not add later deposits to the benchmark or adjust returns for external
-cash flows. A deposit after initialization therefore makes the direct strategy
-comparison misleading.
+Entering a top-up in `main.py` creates a plan; it does not prove that the
+deposit and trades were completed. After the purchased coins are visible in
+the fetched wallet balances, record the completed deposit explicitly:
+
+```bash
+python tracking.py \
+  --deposit-eur 1000 \
+  --deposit-fee-bps 50 \
+  --note "Completed €1,000 deposit"
+```
+
+If `--deposit-fee-bps` is omitted, the benchmark uses
+`HWR_ESTIMATED_FEE_BPS`. The tracker records the gross cash flow, subtracts the
+simulated purchase fee, buys additional benchmark units using the original
+allocation, and never rebalances those units. Both strategies use chained
+time-weighted returns, so deposits cannot be counted as investment
+performance. The tracker refuses to record a deposit until the real wallet
+value has increased at the current price snapshot.
 
 The installed user timer runs this tracker daily at 20:00
 Europe/Amsterdam:

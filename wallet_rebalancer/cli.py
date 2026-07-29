@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from .config import AppConfig, load_config
 from .exchange_scanner import ExchangeScanner
-from .models import Holdings, PriceBook
+from .models import ZERO, Holdings, PriceBook
 from .planner import build_plan
 from .providers import ProviderError, PublicDataClient
 from .reporting import render_json, render_order_message, render_text
@@ -243,7 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     track = subparsers.add_parser(
         "track",
-        help="Record a completed rebalance and update performance charts",
+        help="Record a portfolio snapshot and update performance charts",
     )
     track.add_argument(
         "--holdings-file",
@@ -279,7 +279,24 @@ def build_parser() -> argparse.ArgumentParser:
     track.add_argument(
         "--note",
         default="",
-        help="Optional one-line description of this completed rebalance",
+        help="Optional one-line description of this snapshot",
+    )
+    track.add_argument(
+        "--deposit-eur",
+        type=_positive_decimal,
+        default=ZERO,
+        help=(
+            "Record a completed external EUR deposit already visible in "
+            "the fetched wallet balances"
+        ),
+    )
+    track.add_argument(
+        "--deposit-fee-bps",
+        type=_positive_decimal,
+        help=(
+            "Benchmark purchase fee rate for this deposit "
+            "(default: HWR_ESTIMATED_FEE_BPS)"
+        ),
     )
     track.add_argument(
         "--json",
@@ -389,6 +406,13 @@ def _bot_command(args: argparse.Namespace) -> int:
 
 def _track_command(args: argparse.Namespace) -> int:
     config = load_config()
+    if args.deposit_fee_bps is not None and args.deposit_eur == ZERO:
+        raise ValueError("--deposit-fee-bps requires --deposit-eur")
+    deposit_fee_bps = ZERO
+    if args.deposit_eur > ZERO:
+        deposit_fee_bps = (
+            args.deposit_fee_bps or config.policy.estimated_fee_bps
+        )
     holdings, prices = _portfolio_inputs(args, config)
     summary = record_rebalance(
         holdings,
@@ -397,6 +421,8 @@ def _track_command(args: argparse.Namespace) -> int:
         chart_dir=args.charts_dir,
         start_date=args.start_date,
         note=args.note,
+        deposit_eur=args.deposit_eur,
+        deposit_fee_bps=deposit_fee_bps,
     )
     if args.json:
         print(json.dumps(summary.to_dict(), indent=2))

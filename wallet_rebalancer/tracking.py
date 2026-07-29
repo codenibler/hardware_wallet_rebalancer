@@ -1,4 +1,4 @@
-"""Persistent comparison of the rebalanced portfolio with buy-and-hold."""
+"""Cash-flow-adjusted comparison of rebalancing with buy-and-hold."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Iterable, Mapping
 from .models import ASSETS, ZERO, Holdings, PriceBook, decimal_map
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_START_DATE = date(2026, 7, 28)
 DEFAULT_DATA_PATH = Path("reports/portfolio_tracking.json")
 DEFAULT_CHART_DIR = Path("reports")
@@ -35,6 +35,8 @@ class PerformanceSummary:
     buy_hold_return: Decimal
     outperformance: Decimal
     value_difference_eur: Decimal
+    total_contributions_eur: Decimal
+    total_benchmark_fees_eur: Decimal
     data_path: Path
     value_chart_path: Path
     returns_chart_path: Path
@@ -59,11 +61,23 @@ class PerformanceSummary:
             "buy_hold_return": str(self.buy_hold_return),
             "outperformance": str(self.outperformance),
             "value_difference_eur": str(self.value_difference_eur),
+            "total_contributions_eur": str(self.total_contributions_eur),
+            "total_benchmark_fees_eur": str(self.total_benchmark_fees_eur),
             "data_path": str(self.data_path),
             "value_chart_path": str(self.value_chart_path),
             "returns_chart_path": str(self.returns_chart_path),
             "csv_path": str(self.csv_path),
         }
+
+
+@dataclass(frozen=True)
+class _TrackingState:
+    start_date: date
+    benchmark_amounts: dict[str, Decimal]
+    allocation_weights: dict[str, Decimal]
+    initial_value: Decimal
+    observations: list[dict[str, object]]
+    cash_flows: list[dict[str, object]]
 
 
 def _utc(value: datetime) -> datetime:
@@ -95,6 +109,25 @@ def _value(
 
 def _asset_strings(values: Mapping[str, Decimal]) -> dict[str, str]:
     return {asset: str(values[asset]) for asset in ASSETS}
+
+
+def _allocation_weights(
+    amounts: Mapping[str, Decimal],
+    prices: Mapping[str, Decimal],
+) -> dict[str, Decimal]:
+    values = {asset: amounts[asset] * prices[asset] for asset in ASSETS}
+    total = sum(values.values(), ZERO)
+    if total <= ZERO:
+        raise ValueError("The benchmark has no positive market value")
+
+    weights: dict[str, Decimal] = {}
+    allocated = ZERO
+    for asset in ASSETS[:-1]:
+        weight = values[asset] / total
+        weights[asset] = weight
+        allocated += weight
+    weights[ASSETS[-1]] = Decimal("1") - allocated
+    return weights
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -131,33 +164,50 @@ def _read_store(path: Path) -> dict[str, object]:
         )
     benchmark = raw.get("benchmark")
     observations = raw.get("observations")
-    if not isinstance(benchmark, dict) or not isinstance(observations, list):
+    cash_flows = raw.get("cash_flows")
+    if (
+        not isinstance(benchmark, dict)
+        or not isinstance(observations, list)
+        or not isinstance(cash_flows, list)
+    ):
         raise ValueError("Tracking data is missing benchmark or observations")
     return raw
 
 
 def _validate_store(
     payload: dict[str, object],
-) -> tuple[date, dict[str, Decimal], Decimal, list[dict[str, object]]]:
+) -> _TrackingState:
     benchmark = payload["benchmark"]
     observations = payload["observations"]
+    cash_flows = payload["cash_flows"]
     assert isinstance(benchmark, dict)
     assert isinstance(observations, list)
+    assert isinstance(cash_flows, list)
 
     try:
         start_date = date.fromisoformat(str(benchmark["start_date"]))
         amounts_raw = benchmark["amounts"]
+        initial_amounts_raw = benchmark["initial_amounts"]
+        allocation_weights_raw = benchmark["allocation_weights"]
         initial_value = _decimal(
             benchmark["initial_value_eur"],
             "benchmark.initial_value_eur",
         )
     except (KeyError, ValueError) as exc:
         raise ValueError("Tracking benchmark is incomplete or invalid") from exc
-    if not isinstance(amounts_raw, dict):
+    if (
+        not isinstance(amounts_raw, dict)
+        or not isinstance(initial_amounts_raw, dict)
+        or not isinstance(allocation_weights_raw, dict)
+    ):
         raise ValueError("Tracking benchmark amounts must be an object")
     amounts = decimal_map(amounts_raw)
+    initial_amounts = decimal_map(initial_amounts_raw)
+    allocation_weights = decimal_map(allocation_weights_raw)
     if initial_value <= ZERO:
         raise ValueError("Tracking benchmark initial value must be positive")
+    if sum(allocation_weights.values(), ZERO) != Decimal("1"):
+        raise ValueError("Tracking benchmark allocation weights must sum to 1")
 
     validated_observations: list[dict[str, object]] = []
     previous_time: datetime | None = None
@@ -169,6 +219,13 @@ def _validate_store(
         "buy_hold_return",
         "outperformance",
         "value_difference_eur",
+        "external_cash_flow_eur",
+        "deposit_fee_bps",
+        "benchmark_fee_eur",
+        "benchmark_net_invested_eur",
+        "total_contributions_eur",
+        "total_benchmark_fees_eur",
+        "benchmark_amounts",
     }
     for index, observation in enumerate(observations):
         if not isinstance(observation, dict) or not required <= observation.keys():
@@ -186,13 +243,149 @@ def _validate_store(
         if previous_time is not None and recorded_at <= previous_time:
             raise ValueError("Tracking observations must be strictly chronological")
         previous_time = recorded_at
-        for key in required - {"recorded_at"}:
+        for key in required - {"recorded_at", "benchmark_amounts"}:
             _decimal(observation[key], f"observations[{index}].{key}")
+        benchmark_snapshot = observation["benchmark_amounts"]
+        if not isinstance(benchmark_snapshot, dict):
+            raise ValueError(
+                f"observations[{index}].benchmark_amounts must be an object"
+            )
+        decimal_map(benchmark_snapshot)
         validated_observations.append(observation)
 
     if not validated_observations:
         raise ValueError("Tracking data must contain at least one observation")
-    return start_date, amounts, initial_value, validated_observations
+
+    expected_amounts = dict(initial_amounts)
+    total_contributions = ZERO
+    total_fees = ZERO
+    previous_flow_time: datetime | None = None
+    observation_times = {
+        str(observation["recorded_at"]) for observation in validated_observations
+    }
+    for index, cash_flow in enumerate(cash_flows):
+        if not isinstance(cash_flow, dict):
+            raise ValueError(f"Cash-flow event {index} must be an object")
+        required_flow = {
+            "recorded_at",
+            "type",
+            "gross_amount_eur",
+            "fee_bps",
+            "benchmark_fee_eur",
+            "net_invested_eur",
+            "benchmark_purchases",
+        }
+        if not required_flow <= cash_flow.keys():
+            raise ValueError(f"Cash-flow event {index} is incomplete")
+        if cash_flow["type"] != "deposit":
+            raise ValueError(f"Cash-flow event {index} has an unsupported type")
+        try:
+            flow_time = _utc(
+                datetime.fromisoformat(
+                    str(cash_flow["recorded_at"]).replace("Z", "+00:00")
+                )
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Cash-flow event {index} has an invalid timestamp"
+            ) from exc
+        if previous_flow_time is not None and flow_time <= previous_flow_time:
+            raise ValueError("Cash-flow events must be strictly chronological")
+        previous_flow_time = flow_time
+        if _iso(flow_time) not in observation_times:
+            raise ValueError(
+                f"Cash-flow event {index} has no matching observation"
+            )
+
+        gross = _decimal(
+            cash_flow["gross_amount_eur"],
+            f"cash_flows[{index}].gross_amount_eur",
+        )
+        fee_bps = _decimal(
+            cash_flow["fee_bps"],
+            f"cash_flows[{index}].fee_bps",
+        )
+        fee = _decimal(
+            cash_flow["benchmark_fee_eur"],
+            f"cash_flows[{index}].benchmark_fee_eur",
+        )
+        net = _decimal(
+            cash_flow["net_invested_eur"],
+            f"cash_flows[{index}].net_invested_eur",
+        )
+        if (
+            gross <= ZERO
+            or fee_bps <= ZERO
+            or fee_bps > Decimal("1000")
+            or fee < ZERO
+            or net <= ZERO
+        ):
+            raise ValueError(f"Cash-flow event {index} has invalid amounts")
+        if fee + net != gross:
+            raise ValueError(f"Cash-flow event {index} does not balance")
+
+        purchases_raw = cash_flow["benchmark_purchases"]
+        if not isinstance(purchases_raw, dict):
+            raise ValueError(
+                f"cash_flows[{index}].benchmark_purchases must be an object"
+            )
+        purchases = decimal_map(purchases_raw)
+        for asset in ASSETS:
+            expected_amounts[asset] += purchases[asset]
+        total_contributions += gross
+        total_fees += fee
+
+    if expected_amounts != amounts:
+        raise ValueError("Tracking benchmark amounts do not match cash-flow events")
+    latest = validated_observations[-1]
+    if (
+        _decimal(
+            latest["total_contributions_eur"],
+            "latest total_contributions_eur",
+        )
+        != total_contributions
+        or _decimal(
+            latest["total_benchmark_fees_eur"],
+            "latest total_benchmark_fees_eur",
+        )
+        != total_fees
+    ):
+        raise ValueError("Tracking cash-flow totals do not match observations")
+
+    return _TrackingState(
+        start_date=start_date,
+        benchmark_amounts=amounts,
+        allocation_weights=allocation_weights,
+        initial_value=initial_value,
+        observations=validated_observations,
+        cash_flows=cash_flows,
+    )
+
+
+def _simulate_benchmark_deposit(
+    *,
+    benchmark_amounts: Mapping[str, Decimal],
+    prices: Mapping[str, Decimal],
+    allocation_weights: Mapping[str, Decimal],
+    gross_amount_eur: Decimal,
+    fee_bps: Decimal,
+) -> tuple[dict[str, Decimal], dict[str, Decimal], Decimal, Decimal]:
+    fee_rate = fee_bps / Decimal("10000")
+    net_invested = gross_amount_eur / (Decimal("1") + fee_rate)
+    fee = gross_amount_eur - net_invested
+
+    purchases: dict[str, Decimal] = {}
+    remaining_notional = net_invested
+    for asset in ASSETS[:-1]:
+        notional = net_invested * allocation_weights[asset]
+        purchases[asset] = notional / prices[asset]
+        remaining_notional -= notional
+    purchases[ASSETS[-1]] = remaining_notional / prices[ASSETS[-1]]
+
+    updated_amounts = {
+        asset: benchmark_amounts[asset] + purchases[asset] for asset in ASSETS
+    }
+    return updated_amounts, purchases, fee, net_invested
 
 
 def _observation(
@@ -203,13 +396,75 @@ def _observation(
     actual_amounts: Mapping[str, Decimal],
     benchmark_amounts: Mapping[str, Decimal],
     initial_value: Decimal,
+    previous: Mapping[str, object] | None,
+    external_cash_flow_eur: Decimal,
+    deposit_fee_bps: Decimal,
+    benchmark_fee_eur: Decimal,
+    benchmark_net_invested_eur: Decimal,
+    total_contributions_eur: Decimal,
+    total_benchmark_fees_eur: Decimal,
+    pre_flow_actual_value_eur: Decimal | None,
+    pre_flow_buy_hold_value_eur: Decimal | None,
     note: str,
 ) -> dict[str, object]:
     normalized_prices = prices.normalized()
     actual_value = _value(actual_amounts, normalized_prices)
     buy_hold_value = _value(benchmark_amounts, normalized_prices)
-    actual_return = actual_value / initial_value - Decimal("1")
-    buy_hold_return = buy_hold_value / initial_value - Decimal("1")
+    if previous is None:
+        actual_return = actual_value / initial_value - Decimal("1")
+        buy_hold_return = buy_hold_value / initial_value - Decimal("1")
+    else:
+        previous_actual_value = _decimal(
+            previous["actual_value_eur"],
+            "previous actual_value_eur",
+        )
+        previous_buy_hold_value = _decimal(
+            previous["buy_hold_value_eur"],
+            "previous buy_hold_value_eur",
+        )
+        if previous_actual_value <= ZERO or previous_buy_hold_value <= ZERO:
+            raise ValueError("Previous portfolio values must be positive")
+        if external_cash_flow_eur > ZERO:
+            if (
+                pre_flow_actual_value_eur is None
+                or pre_flow_buy_hold_value_eur is None
+                or pre_flow_actual_value_eur <= ZERO
+                or pre_flow_buy_hold_value_eur <= ZERO
+            ):
+                raise ValueError("Deposit valuation before the cash flow is missing")
+            actual_period_factor = (
+                pre_flow_actual_value_eur
+                / previous_actual_value
+                * actual_value
+                / (pre_flow_actual_value_eur + external_cash_flow_eur)
+            )
+            buy_hold_period_factor = (
+                pre_flow_buy_hold_value_eur
+                / previous_buy_hold_value
+                * buy_hold_value
+                / (pre_flow_buy_hold_value_eur + external_cash_flow_eur)
+            )
+        else:
+            actual_period_factor = actual_value / previous_actual_value
+            buy_hold_period_factor = buy_hold_value / previous_buy_hold_value
+        previous_actual_return = _decimal(
+            previous["actual_return"],
+            "previous actual_return",
+        )
+        previous_buy_hold_return = _decimal(
+            previous["buy_hold_return"],
+            "previous buy_hold_return",
+        )
+        actual_return = (
+            (Decimal("1") + previous_actual_return)
+            * actual_period_factor
+            - Decimal("1")
+        )
+        buy_hold_return = (
+            (Decimal("1") + previous_buy_hold_return)
+            * buy_hold_period_factor
+            - Decimal("1")
+        )
     value_difference = actual_value - buy_hold_value
     return {
         "recorded_at": _iso(recorded_at),
@@ -219,12 +474,19 @@ def _observation(
         "note": note,
         "actual_amounts": _asset_strings(actual_amounts),
         "prices_eur": _asset_strings(normalized_prices),
+        "benchmark_amounts": _asset_strings(benchmark_amounts),
         "actual_value_eur": str(actual_value),
         "buy_hold_value_eur": str(buy_hold_value),
         "actual_return": str(actual_return),
         "buy_hold_return": str(buy_hold_return),
         "outperformance": str(actual_return - buy_hold_return),
         "value_difference_eur": str(value_difference),
+        "external_cash_flow_eur": str(external_cash_flow_eur),
+        "deposit_fee_bps": str(deposit_fee_bps),
+        "benchmark_fee_eur": str(benchmark_fee_eur),
+        "benchmark_net_invested_eur": str(benchmark_net_invested_eur),
+        "total_contributions_eur": str(total_contributions_eur),
+        "total_benchmark_fees_eur": str(total_benchmark_fees_eur),
     }
 
 
@@ -403,7 +665,7 @@ def _write_exports(
     returns_path = chart_dir / "portfolio_returns.svg"
     csv_path = chart_dir / "portfolio_performance.csv"
     subtitle = (
-        f"Fixed-unit benchmark initialized {start_date.isoformat()} · "
+        f"Buy-and-hold benchmark initialized {start_date.isoformat()} · "
         f"{len(observations)} observation"
         f"{'' if len(observations) == 1 else 's'}"
     )
@@ -421,7 +683,7 @@ def _write_exports(
     _atomic_write(
         returns_path,
         _line_chart(
-            title="Cumulative return: rebalancing vs buy-and-hold",
+            title="Cumulative TWR: rebalancing vs buy-and-hold",
             subtitle=subtitle,
             actual=_points(observations, "actual_return"),
             benchmark=_points(observations, "buy_hold_return"),
@@ -441,6 +703,11 @@ def _write_exports(
             "buy_hold_return_pct",
             "outperformance_pct",
             "value_difference_eur",
+            "external_cash_flow_eur",
+            "benchmark_fee_eur",
+            "benchmark_net_invested_eur",
+            "total_contributions_eur",
+            "total_benchmark_fees_eur",
             "note",
         ]
     )
@@ -456,6 +723,11 @@ def _write_exports(
                 _decimal(row["outperformance"], "outperformance")
                 * Decimal("100"),
                 row["value_difference_eur"],
+                row["external_cash_flow_eur"],
+                row["benchmark_fee_eur"],
+                row["benchmark_net_invested_eur"],
+                row["total_contributions_eur"],
+                row["total_benchmark_fees_eur"],
                 row.get("note", ""),
             ]
         )
@@ -497,10 +769,55 @@ def _summary(
             latest["value_difference_eur"],
             "value_difference_eur",
         ),
+        total_contributions_eur=_decimal(
+            latest["total_contributions_eur"],
+            "total_contributions_eur",
+        ),
+        total_benchmark_fees_eur=_decimal(
+            latest["total_benchmark_fees_eur"],
+            "total_benchmark_fees_eur",
+        ),
         data_path=data_path,
         value_chart_path=value_chart_path,
         returns_chart_path=returns_chart_path,
         csv_path=csv_path,
+    )
+
+
+def _matches_existing_observation(
+    observation: Mapping[str, object],
+    *,
+    holdings: Holdings,
+    prices: PriceBook,
+    actual_amounts: Mapping[str, Decimal],
+    deposit_eur: Decimal,
+    deposit_fee_bps: Decimal,
+    note: str,
+) -> bool:
+    stored_actual_amounts = observation.get("actual_amounts")
+    stored_prices = observation.get("prices_eur")
+    if not isinstance(stored_actual_amounts, dict) or not isinstance(
+        stored_prices,
+        dict,
+    ):
+        return False
+    return (
+        decimal_map(stored_actual_amounts) == dict(actual_amounts)
+        and decimal_map(stored_prices) == prices.normalized()
+        and observation.get("holdings_as_of") == _iso(holdings.fetched_at)
+        and observation.get("prices_as_of") == _iso(prices.as_of)
+        and observation.get("price_source") == prices.source
+        and observation.get("note") == note
+        and _decimal(
+            observation.get("external_cash_flow_eur", "0"),
+            "external_cash_flow_eur",
+        )
+        == deposit_eur
+        and _decimal(
+            observation.get("deposit_fee_bps", "0"),
+            "deposit_fee_bps",
+        )
+        == deposit_fee_bps
     )
 
 
@@ -512,12 +829,14 @@ def record_rebalance(
     chart_dir: Path = DEFAULT_CHART_DIR,
     start_date: date = DEFAULT_START_DATE,
     note: str = "",
+    deposit_eur: Decimal | str | int | float = ZERO,
+    deposit_fee_bps: Decimal | str | int | float = ZERO,
 ) -> PerformanceSummary:
-    """Record a completed rebalance and refresh comparison exports.
+    """Record a completed snapshot and refresh comparison exports.
 
-    The first call freezes the supplied asset units as the buy-and-hold
-    benchmark. Later calls value those original units at the new price snapshot
-    while valuing the newly fetched real holdings separately.
+    The first call initializes the buy-and-hold benchmark. A later completed
+    deposit adds fee-adjusted benchmark units at that snapshot's prices and is
+    excluded from both strategies' chained returns.
     """
 
     if not isinstance(start_date, date):
@@ -526,9 +845,18 @@ def record_rebalance(
         raise ValueError("Tracking note must fit on one line")
     if len(note) > 240:
         raise ValueError("Tracking note cannot exceed 240 characters")
+    deposit = _decimal(deposit_eur, "deposit_eur")
+    fee_bps = _decimal(deposit_fee_bps, "deposit_fee_bps")
+    if deposit < ZERO:
+        raise ValueError("Deposit amount cannot be negative")
+    if deposit == ZERO and fee_bps != ZERO:
+        raise ValueError("Deposit fee bps require a positive deposit")
+    if deposit > ZERO and (fee_bps <= ZERO or fee_bps > Decimal("1000")):
+        raise ValueError("Deposit fee bps must be in (0, 1000]")
 
     actual_amounts = holdings.normalized()
     normalized_prices = prices.normalized()
+    cleaned_note = note.strip()
     recorded_at = max(_utc(holdings.fetched_at), _utc(prices.as_of))
     if recorded_at < datetime.combine(start_date, time.min, tzinfo=timezone.utc):
         raise ValueError(
@@ -537,34 +865,152 @@ def record_rebalance(
 
     if data_path.exists():
         payload = _read_store(data_path)
-        (
-            stored_start_date,
-            benchmark_amounts,
-            initial_value,
-            observations,
-        ) = _validate_store(payload)
-        if stored_start_date != start_date:
+        state = _validate_store(payload)
+        if state.start_date != start_date:
             raise ValueError(
-                f"Tracking file started on {stored_start_date}; "
+                f"Tracking file started on {state.start_date}; "
                 f"requested {start_date}"
             )
+        benchmark_amounts = dict(state.benchmark_amounts)
+        allocation_weights = dict(state.allocation_weights)
+        initial_value = state.initial_value
+        observations = state.observations
+        cash_flows = state.cash_flows
     else:
+        if deposit > ZERO:
+            raise ValueError(
+                "Initialize tracking before recording a later deposit"
+            )
         benchmark_amounts = dict(actual_amounts)
         initial_value = _value(benchmark_amounts, normalized_prices)
         if initial_value <= ZERO:
             raise ValueError("The initial portfolio has no positive market value")
+        allocation_weights = _allocation_weights(
+            benchmark_amounts,
+            normalized_prices,
+        )
         payload = {
             "schema_version": SCHEMA_VERSION,
             "benchmark": {
                 "start_date": start_date.isoformat(),
                 "initialized_at": _iso(recorded_at),
+                "initial_amounts": _asset_strings(benchmark_amounts),
                 "amounts": _asset_strings(benchmark_amounts),
+                "allocation_weights": _asset_strings(allocation_weights),
                 "initial_prices_eur": _asset_strings(normalized_prices),
                 "initial_value_eur": str(initial_value),
             },
             "observations": [],
+            "cash_flows": [],
         }
         observations = []
+        cash_flows = []
+
+    previous = observations[-1] if observations else None
+    if previous is not None:
+        latest_time = _utc(
+            datetime.fromisoformat(
+                str(previous["recorded_at"]).replace("Z", "+00:00")
+            )
+        )
+        if recorded_at < latest_time:
+            raise ValueError("Cannot append an older portfolio snapshot")
+        if recorded_at == latest_time:
+            if not _matches_existing_observation(
+                previous,
+                holdings=holdings,
+                prices=prices,
+                actual_amounts=actual_amounts,
+                deposit_eur=deposit,
+                deposit_fee_bps=fee_bps,
+                note=cleaned_note,
+            ):
+                raise ValueError(
+                    "A different observation already exists at this timestamp"
+                )
+            value_path, returns_path, csv_path = _write_exports(
+                observations=observations,
+                chart_dir=chart_dir,
+                start_date=start_date,
+            )
+            return _summary(
+                start_date=start_date,
+                observations=observations,
+                data_path=data_path,
+                value_chart_path=value_path,
+                returns_chart_path=returns_path,
+                csv_path=csv_path,
+            )
+
+    total_contributions = (
+        _decimal(
+            previous["total_contributions_eur"],
+            "total_contributions_eur",
+        )
+        if previous is not None
+        else ZERO
+    )
+    total_benchmark_fees = (
+        _decimal(
+            previous["total_benchmark_fees_eur"],
+            "total_benchmark_fees_eur",
+        )
+        if previous is not None
+        else ZERO
+    )
+    benchmark_fee = ZERO
+    benchmark_net_invested = ZERO
+    pre_flow_actual_value: Decimal | None = None
+    pre_flow_buy_hold_value: Decimal | None = None
+    if deposit > ZERO:
+        assert previous is not None
+        previous_actual_amounts_raw = previous.get("actual_amounts")
+        if not isinstance(previous_actual_amounts_raw, dict):
+            raise ValueError("Previous actual amounts are missing")
+        previous_actual_amounts = decimal_map(previous_actual_amounts_raw)
+        pre_flow_actual_value = _value(
+            previous_actual_amounts,
+            normalized_prices,
+        )
+        pre_flow_buy_hold_value = _value(
+            benchmark_amounts,
+            normalized_prices,
+        )
+        actual_value = _value(actual_amounts, normalized_prices)
+        if actual_value <= pre_flow_actual_value:
+            raise ValueError(
+                "The deposit is not yet reflected in the fetched wallet balances"
+            )
+
+        (
+            benchmark_amounts,
+            benchmark_purchases,
+            benchmark_fee,
+            benchmark_net_invested,
+        ) = _simulate_benchmark_deposit(
+            benchmark_amounts=benchmark_amounts,
+            prices=normalized_prices,
+            allocation_weights=allocation_weights,
+            gross_amount_eur=deposit,
+            fee_bps=fee_bps,
+        )
+        total_contributions += deposit
+        total_benchmark_fees += benchmark_fee
+        cash_flows.append(
+            {
+                "recorded_at": _iso(recorded_at),
+                "type": "deposit",
+                "gross_amount_eur": str(deposit),
+                "fee_bps": str(fee_bps),
+                "benchmark_fee_eur": str(benchmark_fee),
+                "net_invested_eur": str(benchmark_net_invested),
+                "benchmark_purchases": _asset_strings(benchmark_purchases),
+                "note": cleaned_note,
+            }
+        )
+        benchmark_payload = payload["benchmark"]
+        assert isinstance(benchmark_payload, dict)
+        benchmark_payload["amounts"] = _asset_strings(benchmark_amounts)
 
     new_observation = _observation(
         recorded_at=recorded_at,
@@ -573,25 +1019,21 @@ def record_rebalance(
         actual_amounts=actual_amounts,
         benchmark_amounts=benchmark_amounts,
         initial_value=initial_value,
-        note=note.strip(),
+        previous=previous,
+        external_cash_flow_eur=deposit,
+        deposit_fee_bps=fee_bps,
+        benchmark_fee_eur=benchmark_fee,
+        benchmark_net_invested_eur=benchmark_net_invested,
+        total_contributions_eur=total_contributions,
+        total_benchmark_fees_eur=total_benchmark_fees,
+        pre_flow_actual_value_eur=pre_flow_actual_value,
+        pre_flow_buy_hold_value_eur=pre_flow_buy_hold_value,
+        note=cleaned_note,
     )
-    if observations:
-        latest_time = datetime.fromisoformat(
-            str(observations[-1]["recorded_at"]).replace("Z", "+00:00")
-        )
-        if recorded_at < _utc(latest_time):
-            raise ValueError("Cannot append an older portfolio snapshot")
-        if recorded_at == _utc(latest_time):
-            if new_observation != observations[-1]:
-                raise ValueError(
-                    "A different observation already exists at this timestamp"
-                )
-        else:
-            observations.append(new_observation)
-    else:
-        observations.append(new_observation)
+    observations.append(new_observation)
 
     payload["observations"] = observations
+    payload["cash_flows"] = cash_flows
     _atomic_write(data_path, json.dumps(payload, indent=2) + "\n")
     value_path, returns_path, csv_path = _write_exports(
         observations=observations,
@@ -621,8 +1063,19 @@ def render_performance(summary: PerformanceSummary) -> str:
             f"Rebalanced portfolio:  €{summary.actual_value_eur:,.2f}",
             f"Buy-and-hold portfolio: €{summary.buy_hold_value_eur:,.2f}",
             f"Value difference:      €{signed_difference}",
-            f"Rebalanced return:     {summary.actual_return * 100:+.2f}%",
-            f"Buy-and-hold return:   {summary.buy_hold_return * 100:+.2f}%",
+            f"External deposits:     €{summary.total_contributions_eur:,.2f}",
+            (
+                "Benchmark buy fees:    "
+                f"€{summary.total_benchmark_fees_eur:,.2f}"
+            ),
+            (
+                "Rebalanced TWR:        "
+                f"{summary.actual_return * 100:+.2f}%"
+            ),
+            (
+                "Buy-and-hold TWR:      "
+                f"{summary.buy_hold_return * 100:+.2f}%"
+            ),
             f"Outperformance:        {summary.outperformance * 100:+.2f} pp",
             "",
             f"History: {summary.data_path}",
