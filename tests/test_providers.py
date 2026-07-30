@@ -23,7 +23,9 @@ class FakeResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            raise requests.HTTPError("fake URL with secret identifier")
+            error = requests.HTTPError("fake URL with secret identifier")
+            error.response = self
+            raise error
 
     def json(self):
         return self.payload
@@ -121,8 +123,23 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(ProviderError) as caught:
             PublicDataClient(config(), session=session).fetch_bitcoin()
 
+        self.assertIn("HTTP 500", str(caught.exception))
         self.assertNotIn("xpubSensitive", str(caught.exception))
         self.assertNotIn("secret identifier", str(caught.exception))
+
+    def test_default_session_retries_transient_get_failures(self) -> None:
+        session = PublicDataClient(config()).session
+        retry = session.get_adapter("https://").max_retries
+
+        self.assertEqual(retry.total, 3)
+        self.assertEqual(retry.connect, 3)
+        self.assertEqual(retry.read, 3)
+        self.assertEqual(retry.status, 3)
+        self.assertEqual(retry.allowed_methods, frozenset(("GET",)))
+        self.assertEqual(
+            retry.status_forcelist,
+            (429, 500, 502, 503, 504),
+        )
 
 
 if __name__ == "__main__":

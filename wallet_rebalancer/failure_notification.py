@@ -1,4 +1,4 @@
-"""Telegram alert for a failed scheduled performance-tracking run."""
+"""Telegram alert for a failed scheduled daily portfolio run."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .telegram import TelegramClient
 
 TRACKING_FAILURE_MESSAGE = """⚠️ Greetings cryptopian.
 
-The scheduled daily performance check comparing the rebalanced portfolio with buy-and-hold failed.
+The scheduled daily performance and portfolio balance check failed.
 
 Please investigate the logs:
 journalctl --user -u hwr-tracking.service"""

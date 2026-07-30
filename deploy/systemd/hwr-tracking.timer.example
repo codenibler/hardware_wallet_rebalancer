@@ -1,5 +1,5 @@
 [Unit]
-Description=Update strategy performance analytics every day at 20:00
+Description=Track performance and check portfolio balance every day at 20:00
 
 [Timer]
 OnCalendar=*-*-* 20:00:00 Europe/Amsterdam

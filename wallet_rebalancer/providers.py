@@ -9,6 +9,8 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .config import AppConfig
 from .models import ASSETS, ZERO, Holdings, PriceBook
@@ -23,6 +25,9 @@ COINGECKO_IDS = {
     "SOL": "solana",
     "LINK": "chainlink",
 }
+TRANSIENT_HTTP_STATUSES = (429, 500, 502, 503, 504)
+PROVIDER_RETRY_COUNT = 3
+PROVIDER_RETRY_BACKOFF_SECONDS = 1
 
 
 class ProviderError(RuntimeError):
@@ -50,7 +55,7 @@ class PublicDataClient:
         timeout_seconds: float = 20.0,
     ) -> None:
         self.config = config
-        self.session = session or requests.Session()
+        self.session = session or self._retrying_session()
         self.timeout_seconds = timeout_seconds
         self.session.headers.update(
             {
@@ -61,6 +66,26 @@ class PublicDataClient:
                 "Accept": "application/json",
             }
         )
+
+    @staticmethod
+    def _retrying_session() -> requests.Session:
+        """Return a session that retries safe provider reads transiently."""
+
+        retry = Retry(
+            total=PROVIDER_RETRY_COUNT,
+            connect=PROVIDER_RETRY_COUNT,
+            read=PROVIDER_RETRY_COUNT,
+            status=PROVIDER_RETRY_COUNT,
+            allowed_methods=frozenset(("GET",)),
+            status_forcelist=TRANSIENT_HTTP_STATUSES,
+            backoff_factor=PROVIDER_RETRY_BACKOFF_SECONDS,
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session = requests.Session()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     def _get_json(
         self,
@@ -77,6 +102,20 @@ class PublicDataClient:
             )
             response.raise_for_status()
             data = response.json()
+        except requests.HTTPError as exc:
+            status = (
+                exc.response.status_code
+                if exc.response is not None
+                else None
+            )
+            status_text = (
+                f" returned HTTP {status}"
+                if status
+                else " request failed"
+            )
+            raise ProviderError(
+                f"{label}{status_text}; wallet identifier omitted"
+            ) from exc
         except (requests.RequestException, ValueError) as exc:
             raise ProviderError(
                 f"{label} request failed; wallet identifier omitted"

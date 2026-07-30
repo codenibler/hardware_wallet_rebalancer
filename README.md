@@ -7,7 +7,13 @@ A portfolio monitor which tracks holdings against desired split of
 - LINK: 10%
 and recommends rebalances when %s deviate more than 5 percent. Notifies of adjustments through a Telegram bot, and searches for the best deals from available brokers and fiat on-ramp platforms. 
 
-Tracks performance of this rebalancing strategy vs. a buy & hold, accounting for new deposits and increasing both by the net increment in portfolio value. 
+Tracks performance of this rebalancing strategy vs. a buy & hold, accounting
+for new deposits and increasing both by the net increment in portfolio value.
+
+The scheduled job records performance and runs the rebalancing check every day
+at 20:00 Europe/Amsterdam. Scheduled checks always assume a zero deposit. To
+include a new deposit in a rebalancing plan, run `python main.py` manually and
+enter the amount when prompted.
 
 ## Project layout
 - `main.py`: fetch balances, calculate a fee-aware rebalance, rank venues, and
@@ -85,7 +91,10 @@ Quotes can omit funding, withdrawal, network, spread, tax, minimum-size, and rou
 
 
 ## Performance tracking
-To have daily granularity in benchmarking this rebalancing strategy vs the buy & hold, the balances are checked daily at 20:00 Europe/Amsterdam:
+
+To have daily granularity in benchmarking this rebalancing strategy against
+buy and hold, the scheduled service records a tracking snapshot and then runs
+the zero-deposit rebalancing check daily at 20:00 Europe/Amsterdam:
 
 ```bash
 systemctl --user status hwr-tracking.timer
@@ -128,5 +137,4 @@ Run all tests with:
 ```bash
 python -m unittest discover -v
 ```
-
 
