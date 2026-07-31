@@ -5,15 +5,20 @@ A portfolio monitor which tracks holdings against desired split of
 - ETH: 25%
 - SOL: 15%
 - LINK: 10%
-and recommends rebalances when %s deviate more than 5 percent. Notifies of adjustments through a Telegram bot, and searches for the best deals from available brokers and fiat on-ramp platforms. 
+and recommends rebalances when allocation deviates more than 5%. Notifies of adjustments through a Telegram bot, and searches for the best deals from available brokers and fiat on-ramp platforms. 
 
 Tracks performance of this rebalancing strategy vs. a buy & hold, accounting
 for new deposits and increasing both by the net increment in portfolio value.
 
-The scheduled job records performance and runs the rebalancing check every day
-at 20:00 Europe/Amsterdam. Scheduled checks always assume a zero deposit. To
-include a new deposit in a rebalancing plan, run `python main.py` manually and
-enter the amount when prompted.
+Run checks and performance tracking whenever you choose. By default, there is a scheduled run of main.py at 20:00 CET every day. To include a new
+deposit in a rebalancing plan, run `python main.py` and enter the amount when
+prompted.
+
+*Note: I personally do not currently rebalance when the portfolio deviates >5% from intended holdings. In order to avoid excess transaction costs, I make a weekly deposit into my investment.*
+
+*This weekly deposit is allocated in a way which rebalances the portfolio by buying more or less of each cryptocurrency. This way, you do not pay fees on depositing AND rebalancing, and have the same fees as a buy & hold portfolio, whilst conserving the diversification gains from periodic rebalancing.* 
+
+*Eventually, with a large portfolio, this is impossible, but if you plan to make recurring deposits into your investment, at least a little bit of the rebalancing fees can be covered by depositing intelligently.*
 
 ## Project layout
 - `main.py`: fetch balances, calculate a fee-aware rebalance, rank venues, and
@@ -21,7 +26,8 @@ enter the amount when prompted.
 - `tracking.py`: record portfolio performance against the fixed buy-and-hold
   benchmark and refresh the charts.
 - `wallet_rebalancer/`: application code.
-- `deploy/systemd/`: optional bot, report, and tracking service templates.
+- `deploy/systemd/`: optional manually started bot and report service
+  templates.
 - `examples/`: offline balance and price snapshots.
 - `tests/`: unit tests.
 - `reports/`: private generated analytics; ignored by Git.
@@ -67,7 +73,7 @@ The program asks for a new EUR deposit:
 Enter new EUR top-up amount [0]:
 ```
 
-Press Enter for no deposit. For unattended checks, use:
+Press Enter for no deposit. For a non-interactive, zero-deposit check, use:
 
 ```bash
 python main.py --no-prompt
@@ -92,25 +98,15 @@ Quotes can omit funding, withdrawal, network, spread, tax, minimum-size, and rou
 
 ## Performance tracking
 
-To have daily granularity in benchmarking this rebalancing strategy against
-buy and hold, the scheduled service records a tracking snapshot and then runs
-the zero-deposit rebalancing check daily at 20:00 Europe/Amsterdam:
+Record a performance snapshot whenever you want to update the benchmark:
 
 ```bash
-systemctl --user status hwr-tracking.timer
-journalctl --user -u hwr-tracking.service
+python tracking.py --note "Manual snapshot"
 ```
 
-If tracking fails, `hwr-tracking-notify.service` sends a Telegram warning to
-investigate the journal. A missed scheduled run is performed when the computer
-and user service manager become available again.
-
-The reusable units are in `deploy/systemd/`. After changing an installed unit:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user restart hwr-tracking.timer
-```
+Run `python main.py` separately whenever you want a rebalancing report. The
+templates in `deploy/systemd/` are optional manually started services; they do
+not schedule checks or tracking.
 
 ## Telegram commands
 
@@ -137,4 +133,3 @@ Run all tests with:
 ```bash
 python -m unittest discover -v
 ```
-
