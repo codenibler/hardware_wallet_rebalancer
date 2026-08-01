@@ -180,6 +180,108 @@ class PortfolioTrackingTests(unittest.TestCase):
         self.assertIn("external_cash_flow_eur", csv_export)
         self.assertIn("benchmark_net_invested_eur", csv_export)
 
+    def test_automatically_detects_incoming_asset_units(self) -> None:
+        initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
+        prices = {"BTC": 2, "ETH": 4, "SOL": 3, "LINK": 5}
+        self._record(initial, prices, START)
+        after_purchase = {
+            "BTC": 50,
+            "ETH": Decimal("30.5"),
+            "SOL": 15,
+            "LINK": 10,
+        }
+
+        summary = self._record(after_purchase, prices, LATER)
+
+        self.assertEqual(summary.actual_value_eur, Decimal("317"))
+        self.assertEqual(summary.buy_hold_value_eur, Decimal("317"))
+        self.assertEqual(summary.total_contributions_eur, Decimal("22"))
+        self.assertEqual(summary.total_benchmark_fees_eur, ZERO)
+        payload = json.loads(self.data_path.read_text(encoding="utf-8"))
+        flow = payload["cash_flows"][0]
+        self.assertEqual(flow["type"], "detected_deposit")
+        self.assertEqual(Decimal(flow["gross_amount_eur"]), Decimal("22"))
+        purchases = {
+            asset: Decimal(amount)
+            for asset, amount in flow["benchmark_purchases"].items()
+        }
+        self.assertEqual(purchases["BTC"], Decimal("220") / Decimal("59"))
+        self.assertEqual(purchases["ETH"], Decimal("110") / Decimal("59"))
+        self.assertEqual(purchases["SOL"], Decimal("66") / Decimal("59"))
+        self.assertEqual(
+            sum((purchases[asset] * Decimal(prices[asset]) for asset in purchases), ZERO),
+            Decimal("22"),
+        )
+        latest = payload["observations"][-1]
+        self.assertEqual(latest["external_cash_flow_eur"], "22.0")
+        self.assertEqual(latest["deposit_fee_bps"], "0")
+
+    def test_does_not_mistake_a_rebalance_for_an_incoming_deposit(self) -> None:
+        initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
+        prices = {"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1}
+        self._record(initial, prices, START)
+
+        self._record(
+            {"BTC": 45, "ETH": 30, "SOL": 15, "LINK": 10},
+            prices,
+            LATER,
+        )
+
+        payload = json.loads(self.data_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["cash_flows"], [])
+        latest = payload["observations"][-1]
+        self.assertEqual(latest["external_cash_flow_eur"], "0")
+        self.assertEqual(
+            latest["benchmark_amounts"],
+            {"BTC": "50", "ETH": "25", "SOL": "15", "LINK": "10"},
+        )
+
+    def test_repairs_the_latest_legacy_untracked_incoming_assets(self) -> None:
+        initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
+        prices = {"BTC": 2, "ETH": 4, "SOL": 3, "LINK": 5}
+        self._record(initial, prices, START)
+        after_purchase = {"BTC": 50, "ETH": Decimal("30.5"), "SOL": 15, "LINK": 10}
+        self._record(after_purchase, prices, LATER)
+
+        # Re-create the legacy version of the second snapshot: it retained
+        # the received ETH only in the actual portfolio and had no cash flow.
+        payload = json.loads(self.data_path.read_text(encoding="utf-8"))
+        payload["cash_flows"] = []
+        payload["benchmark"]["amounts"] = {
+            asset: str(amount) for asset, amount in initial.items()
+        }
+        legacy = payload["observations"][-1]
+        legacy.update(
+            {
+                "benchmark_amounts": {
+                    asset: str(amount) for asset, amount in initial.items()
+                },
+                "buy_hold_value_eur": "295",
+                "actual_return": str(Decimal("22") / Decimal("295")),
+                "buy_hold_return": "0",
+                "outperformance": str(Decimal("22") / Decimal("295")),
+                "value_difference_eur": "22",
+                "external_cash_flow_eur": "0",
+                "deposit_fee_bps": "0",
+                "benchmark_fee_eur": "0",
+                "benchmark_net_invested_eur": "0",
+                "total_contributions_eur": "0",
+                "total_benchmark_fees_eur": "0",
+            }
+        )
+        self.data_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        summary = self._record(after_purchase, prices, AFTER_DEPOSIT)
+
+        repaired = json.loads(self.data_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(repaired["cash_flows"]), 1)
+        self.assertEqual(
+            repaired["cash_flows"][0]["type"],
+            "detected_deposit",
+        )
+        self.assertEqual(summary.buy_hold_value_eur, Decimal("317"))
+        self.assertEqual(summary.total_contributions_eur, Decimal("22"))
+
     def test_returns_remain_cash_flow_adjusted_after_a_deposit(self) -> None:
         initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
         prices = {"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1}

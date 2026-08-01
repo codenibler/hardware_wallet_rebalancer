@@ -7,8 +7,11 @@ A portfolio monitor which tracks holdings against desired split of
 - LINK: 10%
 and recommends rebalances when allocation deviates more than 5%. Notifies of adjustments through a Telegram bot, and searches for the best deals from available brokers and fiat on-ramp platforms. 
 
-Tracks performance of this rebalancing strategy vs. a buy & hold, accounting
-for new deposits and increasing both by the net increment in portfolio value.
+Tracks performance of this rebalancing strategy vs. a buy & hold. Every
+portfolio check compares the balances from the configured XPUBs and wallet
+addresses with the preceding snapshot. When all tracked asset balances are
+unchanged or higher and at least one increased, their value is treated as a
+contribution and buy-and-hold invests it in its fixed starting allocation.
 
 Run checks and performance tracking whenever you choose. By default, there is a scheduled run of main.py at 20:00 CET every day. To include a new
 deposit in a rebalancing plan, run `python main.py` and enter the amount when
@@ -23,8 +26,8 @@ prompted.
 ## Project layout
 - `main.py`: fetch balances, calculate a fee-aware rebalance, rank venues, and
   send the result through Telegram.
-- `tracking.py`: record portfolio performance against the fixed buy-and-hold
-  benchmark and refresh the charts.
+- `tracking.py`: record portfolio performance, detect unambiguous incoming
+  assets, and refresh the charts.
 - `wallet_rebalancer/`: application code.
 - `deploy/systemd/`: optional manually started bot and report service
   templates.
@@ -98,7 +101,12 @@ Quotes can omit funding, withdrawal, network, spread, tax, minimum-size, and rou
 
 ## Performance tracking
 
-Record a performance snapshot whenever you want to update the benchmark:
+`main.py` records a performance snapshot as part of every check. It values
+unambiguous net incoming units at the snapshot price and adds that value to
+buy-and-hold's fixed starting allocation, so a completed purchase that has
+reached a configured wallet needs no manually entered EUR amount.
+
+`tracking.py` can also record a performance-only snapshot:
 
 ```bash
 python tracking.py --note "Manual snapshot"
@@ -107,6 +115,12 @@ python tracking.py --note "Manual snapshot"
 Run `python main.py` separately whenever you want a rebalancing report. The
 templates in `deploy/systemd/` are optional manually started services; they do
 not schedule checks or tracking.
+
+For safety, an increase is not classified as a deposit if any tracked asset
+decreased since the prior snapshot. That pattern can be a rebalance, sale, or
+withdrawal and remains unclassified rather than corrupting the comparison. Use
+`tracking.py --deposit-eur ... --deposit-fee-bps ...` for an explicit
+correction in that case.
 
 ## Telegram commands
 

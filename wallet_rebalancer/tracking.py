@@ -277,7 +277,12 @@ def _validate_store(
         }
         if not required_flow <= cash_flow.keys():
             raise ValueError(f"Cash-flow event {index} is incomplete")
-        if cash_flow["type"] != "deposit":
+        flow_type = cash_flow["type"]
+        if flow_type not in {
+            "deposit",
+            "detected_deposit",
+            "detected_in_kind_deposit",
+        }:
             raise ValueError(f"Cash-flow event {index} has an unsupported type")
         try:
             flow_time = _utc(
@@ -313,16 +318,20 @@ def _validate_store(
             cash_flow["net_invested_eur"],
             f"cash_flows[{index}].net_invested_eur",
         )
-        if (
+        invalid_amounts = (
             gross <= ZERO
-            or fee_bps <= ZERO
-            or fee_bps > Decimal("1000")
             or fee < ZERO
             or net <= ZERO
-        ):
+            or fee + net != gross
+        )
+        if flow_type == "deposit":
+            invalid_amounts = invalid_amounts or (
+                fee_bps <= ZERO or fee_bps > Decimal("1000")
+            )
+        else:
+            invalid_amounts = invalid_amounts or fee_bps != ZERO or fee != ZERO
+        if invalid_amounts:
             raise ValueError(f"Cash-flow event {index} has invalid amounts")
-        if fee + net != gross:
-            raise ValueError(f"Cash-flow event {index} does not balance")
 
         purchases_raw = cash_flow["benchmark_purchases"]
         if not isinstance(purchases_raw, dict):
@@ -386,6 +395,306 @@ def _simulate_benchmark_deposit(
         asset: benchmark_amounts[asset] + purchases[asset] for asset in ASSETS
     }
     return updated_amounts, purchases, fee, net_invested
+
+
+def _detected_in_kind_deposit(
+    *,
+    previous_actual_amounts: Mapping[str, Decimal],
+    actual_amounts: Mapping[str, Decimal],
+    prices: Mapping[str, Decimal],
+) -> tuple[dict[str, Decimal], Decimal] | None:
+    """Return newly received asset units when the wallet only grew.
+
+    Balances from the configured XPUB and wallet addresses are aggregated by
+    the provider, so an internal transfer between configured addresses has no
+    effect here.  A decrease in any tracked asset makes the change ambiguous
+    (for example, a rebalance or a withdrawal), and is deliberately not
+    classified as an external contribution.
+    """
+
+    additions = {
+        asset: actual_amounts[asset] - previous_actual_amounts[asset]
+        for asset in ASSETS
+    }
+    if any(amount < ZERO for amount in additions.values()):
+        return None
+    if not any(amount > ZERO for amount in additions.values()):
+        return None
+    return additions, _value(additions, prices)
+
+
+def _backfill_latest_detected_deposit(payload: dict[str, object]) -> None:
+    """Upgrade the most recent legacy zero-flow snapshot, if unambiguous.
+
+    Earlier versions recorded balance changes but required a separately entered
+    EUR deposit.  On the first run after upgrading, repair the most recent
+    such snapshot from the observed incoming units.  Only the latest snapshot
+    can be safely amended without replaying subsequent historical prices.
+    """
+
+    benchmark = payload["benchmark"]
+    observations = payload["observations"]
+    cash_flows = payload["cash_flows"]
+    assert isinstance(benchmark, dict)
+    assert isinstance(observations, list)
+    assert isinstance(cash_flows, list)
+    if len(observations) < 2:
+        return
+
+    latest = observations[-1]
+    previous = observations[-2]
+    if not isinstance(latest, dict) or not isinstance(previous, dict):
+        return
+    latest_time = str(latest.get("recorded_at", ""))
+    if any(
+        isinstance(flow, dict) and flow.get("recorded_at") == latest_time
+        for flow in cash_flows
+    ) or (
+        _decimal(
+            latest.get("external_cash_flow_eur", "0"),
+            "external_cash_flow_eur",
+        )
+        != ZERO
+    ):
+        return
+
+    previous_actual_raw = previous.get("actual_amounts")
+    actual_raw = latest.get("actual_amounts")
+    prices_raw = latest.get("prices_eur")
+    if (
+        not isinstance(previous_actual_raw, dict)
+        or not isinstance(actual_raw, dict)
+        or not isinstance(prices_raw, dict)
+    ):
+        return
+    previous_actual = decimal_map(previous_actual_raw)
+    actual = decimal_map(actual_raw)
+    prices = decimal_map(prices_raw)
+    detected = _detected_in_kind_deposit(
+        previous_actual_amounts=previous_actual,
+        actual_amounts=actual,
+        prices=prices,
+    )
+    if detected is None:
+        return
+    _, gross = detected
+
+    previous_benchmark_raw = previous.get("benchmark_amounts")
+    if not isinstance(previous_benchmark_raw, dict):
+        return
+    previous_benchmark = decimal_map(previous_benchmark_raw)
+    allocation_weights_raw = benchmark.get("allocation_weights")
+    if not isinstance(allocation_weights_raw, dict):
+        return
+    allocation_weights = decimal_map(allocation_weights_raw)
+    updated_benchmark, benchmark_purchases, _, net_invested = (
+        _simulate_benchmark_deposit(
+            benchmark_amounts=previous_benchmark,
+            prices=prices,
+            allocation_weights=allocation_weights,
+            gross_amount_eur=gross,
+            fee_bps=ZERO,
+        )
+    )
+    holdings_as_of = _utc(
+        datetime.fromisoformat(str(latest["holdings_as_of"]).replace("Z", "+00:00"))
+    )
+    prices_as_of = _utc(
+        datetime.fromisoformat(str(latest["prices_as_of"]).replace("Z", "+00:00"))
+    )
+    recorded_at = _utc(
+        datetime.fromisoformat(str(latest["recorded_at"]).replace("Z", "+00:00"))
+    )
+    rebuilt = _observation(
+        recorded_at=recorded_at,
+        holdings=Holdings(amounts=actual, fetched_at=holdings_as_of),
+        prices=PriceBook(
+            prices_eur=prices,
+            as_of=prices_as_of,
+            source=str(latest["price_source"]),
+        ),
+        actual_amounts=actual,
+        benchmark_amounts=updated_benchmark,
+        initial_value=_decimal(benchmark["initial_value_eur"], "initial_value_eur"),
+        previous=previous,
+        external_cash_flow_eur=gross,
+        deposit_fee_bps=ZERO,
+        benchmark_fee_eur=ZERO,
+        benchmark_net_invested_eur=net_invested,
+        total_contributions_eur=(
+            _decimal(previous["total_contributions_eur"], "total_contributions_eur")
+            + gross
+        ),
+        total_benchmark_fees_eur=_decimal(
+            previous["total_benchmark_fees_eur"],
+            "total_benchmark_fees_eur",
+        ),
+        pre_flow_actual_value_eur=_value(previous_actual, prices),
+        pre_flow_buy_hold_value_eur=_value(previous_benchmark, prices),
+        note=str(latest.get("note", "")),
+    )
+    observations[-1] = rebuilt
+    cash_flows.append(
+        {
+            "recorded_at": latest_time,
+            "type": "detected_deposit",
+            "gross_amount_eur": str(gross),
+            "fee_bps": "0",
+            "benchmark_fee_eur": "0",
+            "net_invested_eur": str(net_invested),
+            "benchmark_purchases": _asset_strings(benchmark_purchases),
+            "note": "Automatically detected wallet contribution",
+        }
+    )
+    benchmark["amounts"] = _asset_strings(updated_benchmark)
+
+
+def _migrate_legacy_in_kind_deposits(payload: dict[str, object]) -> None:
+    """Replace legacy copied-unit benchmark deposits with fixed-allocation buys."""
+
+    benchmark = payload["benchmark"]
+    observations = payload["observations"]
+    cash_flows = payload["cash_flows"]
+    assert isinstance(benchmark, dict)
+    assert isinstance(observations, list)
+    assert isinstance(cash_flows, list)
+    if not any(
+        isinstance(flow, dict)
+        and flow.get("type") == "detected_in_kind_deposit"
+        for flow in cash_flows
+    ):
+        return
+
+    initial_amounts_raw = benchmark.get("initial_amounts")
+    allocation_weights_raw = benchmark.get("allocation_weights")
+    if not isinstance(initial_amounts_raw, dict) or not isinstance(
+        allocation_weights_raw,
+        dict,
+    ):
+        return
+    benchmark_amounts = decimal_map(initial_amounts_raw)
+    allocation_weights = decimal_map(allocation_weights_raw)
+    initial_value = _decimal(benchmark["initial_value_eur"], "initial_value_eur")
+    flows_by_time = {
+        str(flow["recorded_at"]): flow
+        for flow in cash_flows
+        if isinstance(flow, dict)
+    }
+    rebuilt = [observations[0]]
+    total_contributions = ZERO
+    total_fees = ZERO
+
+    for raw in observations[1:]:
+        if not isinstance(raw, dict) or not isinstance(rebuilt[-1], dict):
+            return
+        previous = rebuilt[-1]
+        actual_raw = raw.get("actual_amounts")
+        previous_actual_raw = previous.get("actual_amounts")
+        prices_raw = raw.get("prices_eur")
+        if (
+            not isinstance(actual_raw, dict)
+            or not isinstance(previous_actual_raw, dict)
+            or not isinstance(prices_raw, dict)
+        ):
+            return
+        actual = decimal_map(actual_raw)
+        previous_actual = decimal_map(previous_actual_raw)
+        prices = decimal_map(prices_raw)
+        flow = flows_by_time.get(str(raw.get("recorded_at", "")))
+        gross = ZERO
+        fee = ZERO
+        net = ZERO
+        fee_bps = ZERO
+        pre_flow_actual: Decimal | None = None
+        pre_flow_benchmark: Decimal | None = None
+        if flow is not None:
+            if flow.get("type") == "detected_in_kind_deposit":
+                received_raw = flow.get("benchmark_purchases")
+                if not isinstance(received_raw, dict):
+                    return
+                gross = _value(decimal_map(received_raw), prices)
+                (
+                    benchmark_amounts,
+                    purchases,
+                    fee,
+                    net,
+                ) = _simulate_benchmark_deposit(
+                    benchmark_amounts=benchmark_amounts,
+                    prices=prices,
+                    allocation_weights=allocation_weights,
+                    gross_amount_eur=gross,
+                    fee_bps=ZERO,
+                )
+                flow["type"] = "detected_deposit"
+                flow["gross_amount_eur"] = str(gross)
+                flow["fee_bps"] = "0"
+                flow["benchmark_fee_eur"] = "0"
+                flow["net_invested_eur"] = str(net)
+                flow["benchmark_purchases"] = _asset_strings(purchases)
+                flow["note"] = "Automatically detected wallet contribution"
+            else:
+                purchases_raw = flow.get("benchmark_purchases")
+                if not isinstance(purchases_raw, dict):
+                    return
+                purchases = decimal_map(purchases_raw)
+                benchmark_amounts = {
+                    asset: benchmark_amounts[asset] + purchases[asset]
+                    for asset in ASSETS
+                }
+                gross = _decimal(flow["gross_amount_eur"], "gross_amount_eur")
+                fee = _decimal(flow["benchmark_fee_eur"], "benchmark_fee_eur")
+                net = _decimal(flow["net_invested_eur"], "net_invested_eur")
+                fee_bps = _decimal(flow["fee_bps"], "fee_bps")
+            pre_flow_actual = _value(previous_actual, prices)
+            pre_flow_benchmark = _value(
+                decimal_map(previous["benchmark_amounts"]),
+                prices,
+            )
+            total_contributions += gross
+            total_fees += fee
+
+        holdings_as_of = _utc(
+            datetime.fromisoformat(
+                str(raw["holdings_as_of"]).replace("Z", "+00:00")
+            )
+        )
+        prices_as_of = _utc(
+            datetime.fromisoformat(
+                str(raw["prices_as_of"]).replace("Z", "+00:00")
+            )
+        )
+        recorded_at = _utc(
+            datetime.fromisoformat(
+                str(raw["recorded_at"]).replace("Z", "+00:00")
+            )
+        )
+        rebuilt.append(
+            _observation(
+                recorded_at=recorded_at,
+                holdings=Holdings(amounts=actual, fetched_at=holdings_as_of),
+                prices=PriceBook(
+                    prices_eur=prices,
+                    as_of=prices_as_of,
+                    source=str(raw["price_source"]),
+                ),
+                actual_amounts=actual,
+                benchmark_amounts=benchmark_amounts,
+                initial_value=initial_value,
+                previous=previous,
+                external_cash_flow_eur=gross,
+                deposit_fee_bps=fee_bps,
+                benchmark_fee_eur=fee,
+                benchmark_net_invested_eur=net,
+                total_contributions_eur=total_contributions,
+                total_benchmark_fees_eur=total_fees,
+                pre_flow_actual_value_eur=pre_flow_actual,
+                pre_flow_buy_hold_value_eur=pre_flow_benchmark,
+                note=str(raw.get("note", "")),
+            )
+        )
+
+    observations[:] = rebuilt
+    benchmark["amounts"] = _asset_strings(benchmark_amounts)
 
 
 def _observation(
@@ -801,24 +1110,29 @@ def _matches_existing_observation(
         dict,
     ):
         return False
-    return (
+    base_match = (
         decimal_map(stored_actual_amounts) == dict(actual_amounts)
         and decimal_map(stored_prices) == prices.normalized()
         and observation.get("holdings_as_of") == _iso(holdings.fetched_at)
         and observation.get("prices_as_of") == _iso(prices.as_of)
         and observation.get("price_source") == prices.source
         and observation.get("note") == note
-        and _decimal(
-            observation.get("external_cash_flow_eur", "0"),
-            "external_cash_flow_eur",
-        )
-        == deposit_eur
-        and _decimal(
+    )
+    stored_fee_bps = _decimal(
             observation.get("deposit_fee_bps", "0"),
             "deposit_fee_bps",
         )
-        == deposit_fee_bps
-    )
+    if not base_match or stored_fee_bps != deposit_fee_bps:
+        return False
+    if deposit_eur == ZERO:
+        # A repeat of an automatically detected in-kind contribution has no
+        # user-supplied EUR amount to compare. Matching snapshot inputs make
+        # it idempotent; the stored benchmark remains authoritative.
+        return True
+    return _decimal(
+        observation.get("external_cash_flow_eur", "0"),
+        "external_cash_flow_eur",
+    ) == deposit_eur
 
 
 def record_rebalance(
@@ -865,6 +1179,8 @@ def record_rebalance(
 
     if data_path.exists():
         payload = _read_store(data_path)
+        _migrate_legacy_in_kind_deposits(payload)
+        _backfill_latest_detected_deposit(payload)
         state = _validate_store(payload)
         if state.start_date != start_date:
             raise ValueError(
@@ -1011,6 +1327,55 @@ def record_rebalance(
         benchmark_payload = payload["benchmark"]
         assert isinstance(benchmark_payload, dict)
         benchmark_payload["amounts"] = _asset_strings(benchmark_amounts)
+    elif previous is not None:
+        previous_actual_amounts_raw = previous.get("actual_amounts")
+        if not isinstance(previous_actual_amounts_raw, dict):
+            raise ValueError("Previous actual amounts are missing")
+        previous_actual_amounts = decimal_map(previous_actual_amounts_raw)
+        detected = _detected_in_kind_deposit(
+            previous_actual_amounts=previous_actual_amounts,
+            actual_amounts=actual_amounts,
+            prices=normalized_prices,
+        )
+        if detected is not None:
+            _, detected_value = detected
+            pre_flow_actual_value = _value(
+                previous_actual_amounts,
+                normalized_prices,
+            )
+            pre_flow_buy_hold_value = _value(
+                benchmark_amounts,
+                normalized_prices,
+            )
+            (
+                benchmark_amounts,
+                benchmark_purchases,
+                benchmark_fee,
+                benchmark_net_invested,
+            ) = _simulate_benchmark_deposit(
+                benchmark_amounts=benchmark_amounts,
+                prices=normalized_prices,
+                allocation_weights=allocation_weights,
+                gross_amount_eur=detected_value,
+                fee_bps=ZERO,
+            )
+            deposit = detected_value
+            total_contributions += deposit
+            cash_flows.append(
+                {
+                    "recorded_at": _iso(recorded_at),
+                    "type": "detected_deposit",
+                    "gross_amount_eur": str(deposit),
+                    "fee_bps": "0",
+                    "benchmark_fee_eur": "0",
+                    "net_invested_eur": str(benchmark_net_invested),
+                    "benchmark_purchases": _asset_strings(benchmark_purchases),
+                    "note": "Automatically detected wallet contribution",
+                }
+            )
+            benchmark_payload = payload["benchmark"]
+            assert isinstance(benchmark_payload, dict)
+            benchmark_payload["amounts"] = _asset_strings(benchmark_amounts)
 
     new_observation = _observation(
         recorded_at=recorded_at,

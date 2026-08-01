@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from .config import AppConfig, load_config
 from .exchange_scanner import ExchangeScanner
-from .models import ZERO, Holdings, PriceBook
+from .models import ZERO, Holdings, PortfolioPlan, PriceBook
 from .planner import build_plan
 from .providers import ProviderError, PublicDataClient
 from .reporting import render_json, render_order_message, render_text
@@ -330,10 +330,33 @@ def _render_orders_with_venues(
     return render_order_message(plan, venues=venues)
 
 
+def _track_plan_snapshot(plan: PortfolioPlan) -> None:
+    """Persist the same wallet snapshot used for a one-shot check.
+
+    ``record_rebalance`` compares the aggregated balances from every
+    configured XPUB and wallet address to the prior snapshot.  It credits
+    unambiguous net incoming asset value to buy-and-hold's fixed allocation.
+    """
+
+    holdings = Holdings(
+        amounts={asset.asset: asset.amount for asset in plan.assets},
+        pending_bitcoin=plan.pending_bitcoin,
+        fetched_at=plan.holdings_as_of,
+    )
+    prices = PriceBook(
+        prices_eur={asset.asset: asset.price_eur for asset in plan.assets},
+        as_of=plan.prices_as_of,
+        source=plan.price_source,
+    )
+    record_rebalance(holdings, prices)
+
+
 def _check_command(args: argparse.Namespace) -> int:
     config = load_config()
     args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
     plan = _plan_from_args(args, config)
+    if isinstance(plan, PortfolioPlan):
+        _track_plan_snapshot(plan)
     text_report = render_text(plan)
     print(
         render_json(plan) if args.json else text_report,

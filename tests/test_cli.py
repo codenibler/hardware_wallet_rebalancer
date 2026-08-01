@@ -4,6 +4,7 @@ import argparse
 import io
 import os
 import unittest
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from wallet_rebalancer.cli import (
     _track_command,
     build_parser,
 )
+from wallet_rebalancer.models import AssetPlan, PortfolioPlan
 
 
 class PromptTopUpTests(unittest.TestCase):
@@ -105,6 +107,58 @@ class CheckArgumentTests(unittest.TestCase):
 
 
 class TrackingCommandTests(unittest.TestCase):
+    @staticmethod
+    def _portfolio_plan() -> PortfolioPlan:
+        timestamp = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        assets = tuple(
+            AssetPlan(
+                asset=asset,
+                amount=Decimal("1"),
+                price_eur=Decimal("2"),
+                current_value_eur=Decimal("2"),
+                current_weight=Decimal("0.25"),
+                target_weight=Decimal("0.25"),
+                drift=Decimal("0"),
+                desired_value_eur=Decimal("2"),
+                desired_amount=Decimal("1"),
+                trade_value_eur=Decimal("0"),
+            )
+            for asset in ("BTC", "ETH", "SOL", "LINK")
+        )
+        return PortfolioPlan(
+            assets=assets,
+            trades=(),
+            current_total_eur=Decimal("8"),
+            top_up_eur=Decimal("0"),
+            estimated_fee_bps=Decimal("50"),
+            estimated_fees_eur=Decimal("0"),
+            desired_invested_total_eur=Decimal("8"),
+            threshold=Decimal("0.05"),
+            max_abs_drift=Decimal("0"),
+            threshold_rebalance_needed=False,
+            minimum_top_up_for_buy_only_eur=Decimal("0"),
+            prices_as_of=timestamp,
+            holdings_as_of=timestamp,
+            price_source="test",
+        )
+
+    def test_check_records_the_snapshot_used_for_its_plan(self) -> None:
+        args = build_parser().parse_args(["check", "--no-prompt", "--no-telegram"])
+
+        with (
+            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch(
+                "wallet_rebalancer.cli._plan_from_args",
+                return_value=self._portfolio_plan(),
+            ),
+            patch("wallet_rebalancer.cli._track_plan_snapshot") as track,
+            patch("wallet_rebalancer.cli.render_text", return_value="report"),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertEqual(_check_command(args), 0)
+
+        track.assert_called_once()
+
     def test_deposit_uses_configured_fee_rate_by_default(self) -> None:
         args = build_parser().parse_args(
             ["track", "--deposit-eur", "1000", "--json"]

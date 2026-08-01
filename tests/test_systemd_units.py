@@ -15,15 +15,9 @@ class ScheduledPortfolioCheckTests(unittest.TestCase):
             ROOT / "deploy/systemd/hwr-tracking.service.example"
         ).read_text(encoding="utf-8")
 
-        tracking_command = "python tracking.py --note"
         balance_command = "python main.py --no-prompt"
         self.assertIn("Type=oneshot", service)
-        self.assertIn(tracking_command, service)
         self.assertIn(balance_command, service)
-        self.assertLess(
-            service.index(tracking_command),
-            service.index(balance_command),
-        )
 
     def test_combined_service_is_triggered_daily_at_20_00(self) -> None:
         timer = (
