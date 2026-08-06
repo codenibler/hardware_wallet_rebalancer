@@ -17,8 +17,15 @@ BACKGROUND = "#0f172a"
 GRID = "#334155"
 TEXT = "#e2e8f0"
 MUTED = "#94a3b8"
-BLUE = "#3b82f6"
-AMBER = "#f59e0b"
+PERFORMANCE_BLUE = "#3b82f6"
+PERFORMANCE_AMBER = "#f59e0b"
+TARGET = "#f8fafc"
+ASSET_COLORS = {
+    "BTC": "#fbbf24",
+    "ETH": "#8b5cf6",
+    "SOL": "#22c55e",
+    "LINK": "#3b82f6",
+}
 
 
 def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
@@ -65,6 +72,23 @@ def _save(image: Image.Image, path: Path) -> Path:
 
 def _money(value: Decimal) -> str:
     return f"€{value:,.0f}"
+
+
+def _dotted_line(
+    draw: ImageDraw.ImageDraw,
+    *,
+    start: int,
+    end: int,
+    y: int,
+    color: str,
+    width: int = 4,
+) -> None:
+    for position in range(start, end, 16):
+        draw.line(
+            (position, y, min(position + 8, end), y),
+            fill=color,
+            width=width,
+        )
 
 
 def render_allocation_chart(
@@ -119,7 +143,6 @@ def render_allocation_chart(
         )
 
     slot = (right - left) / len(rows)
-    targets: list[tuple[int, int]] = []
     for index, row in enumerate(rows):
         center = int(left + slot * (index + 0.5))
         half_width = int(slot * 0.28)
@@ -127,7 +150,7 @@ def render_allocation_chart(
         draw.rounded_rectangle(
             (center - half_width, bar_top, center + half_width, bottom),
             radius=9,
-            fill=BLUE,
+            fill=ASSET_COLORS[row.asset],
         )
         draw.text(
             (center, min(bottom - 18, bar_top + 22)),
@@ -143,37 +166,32 @@ def render_allocation_chart(
             font=label_font,
             anchor="mm",
         )
-        targets.append((center, y(row.target_weight)))
-
-    if len(targets) > 1:
-        draw.line(targets, fill=AMBER, width=5, joint="curve")
-    for (center, position), row in zip(targets, rows):
-        draw.ellipse(
-            (center - 7, position - 7, center + 7, position + 7),
-            fill=BACKGROUND,
-            outline=AMBER,
-            width=4,
+        target_y = y(row.target_weight)
+        _dotted_line(
+            draw,
+            start=center - half_width - 18,
+            end=center + half_width + 18,
+            y=target_y,
+            color=TARGET,
         )
         draw.text(
-            (center, position - 18),
+            (center, target_y - 10),
             f"target {row.target_weight * 100:.0f}%",
-            fill=AMBER,
+            fill=TARGET,
             font=small_font,
-            anchor="ms",
+            anchor="mb",
         )
 
-    draw.rectangle((left, 625, left + 24, 641), fill=BLUE)
-    draw.text(
-        (left + 34, 633),
-        "Balance (EUR)",
-        fill=TEXT,
-        font=small_font,
-        anchor="lm",
+    _dotted_line(
+        draw,
+        start=left,
+        end=left + 38,
+        y=633,
+        color=TARGET,
     )
-    draw.line((left + 205, 633, left + 235, 633), fill=AMBER, width=4)
     draw.text(
-        (left + 245, 633),
-        "Desired allocation",
+        (left + 50, 633),
+        "Intended allocation",
         fill=TEXT,
         font=small_font,
         anchor="lm",
@@ -234,8 +252,8 @@ def render_performance_chart(
         )
 
     for label, points, color in (
-        ("Rebalanced", actual_points, BLUE),
-        ("Buy & hold", benchmark_points, AMBER),
+        ("Rebalanced", actual_points, PERFORMANCE_BLUE),
+        ("Buy & hold", benchmark_points, PERFORMANCE_AMBER),
     ):
         coordinates = [(x(index), y(value)) for index, (_, value) in enumerate(points)]
         if len(coordinates) > 1:
