@@ -20,6 +20,7 @@ from .bitvavo import (
     load_readonly_credentials,
     load_trading_credentials,
 )
+from .charts import render_allocation_chart
 from .config import AppConfig, load_config
 from .execution import (
     DEFAULT_EXECUTION_STATE_PATH,
@@ -120,7 +121,7 @@ def _prompt_bitvavo_amount() -> Decimal:
             raise ValueError("No deposit amount received") from exc
 
         try:
-            return _positive_decimal(raw_value.strip())
+            return _non_negative_decimal(raw_value.strip())
         except argparse.ArgumentTypeError as exc:
             print(f"Invalid amount: {exc}. Please try again.", file=sys.stderr)
 
@@ -420,7 +421,7 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _track_plan_snapshot(plan: PortfolioPlan) -> None:
+def _track_plan_snapshot(plan: PortfolioPlan):
     """Persist the same wallet snapshot used for a one-shot check.
 
     ``record_rebalance`` compares the aggregated balances from every
@@ -438,15 +439,18 @@ def _track_plan_snapshot(plan: PortfolioPlan) -> None:
         as_of=plan.prices_as_of,
         source=plan.price_source,
     )
-    record_rebalance(holdings, prices)
+    return record_rebalance(holdings, prices)
 
 
 def _check_command(args: argparse.Namespace) -> int:
     config = load_config()
     args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
     plan = _plan_from_args(args, config)
-    if isinstance(plan, PortfolioPlan):
+    summary = (
         _track_plan_snapshot(plan)
+        if isinstance(plan, PortfolioPlan)
+        else None
+    )
     text_report = render_text(plan)
     print(
         render_json(plan) if args.json else text_report,
@@ -456,11 +460,24 @@ def _check_command(args: argparse.Namespace) -> int:
     if not args.no_telegram:
         token = _require_env("TELEGRAM_BOT_TOKEN")
         chat_id = _require_env("TELEGRAM_CHAT_ID")
-        TelegramClient(token).send_message(
+        client = TelegramClient(token)
+        client.send_message(
             chat_id,
             render_order_message(plan),
             parse_mode="HTML",
         )
+        if isinstance(plan, PortfolioPlan) and summary is not None:
+            allocation_path = render_allocation_chart(plan)
+            client.send_photo(
+                chat_id,
+                allocation_path,
+                caption="Current balances vs desired allocation",
+            )
+            client.send_photo(
+                chat_id,
+                summary.performance_image_path,
+                caption="Portfolio performance vs buy-and-hold",
+            )
     return 0
 
 
@@ -593,6 +610,18 @@ def _bitvavo_top_up_command(args: argparse.Namespace) -> int:
 def _interactive_bitvavo_command() -> int:
     confirm = _prompt_bitvavo_mode()
     amount = _prompt_bitvavo_amount()
+    if amount == ZERO:
+        return _check_command(
+            argparse.Namespace(
+                no_prompt=True,
+                holdings_file=None,
+                prices_file=None,
+                threshold=None,
+                fee_bps=None,
+                json=False,
+                no_telegram=False,
+            )
+        )
     args = argparse.Namespace(
         amount=amount,
         confirm=confirm,

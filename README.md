@@ -85,7 +85,8 @@ Press Enter at the first prompt to choose Demo safely. Demo uses current wallet
 and Bitvavo account data to show the exact proposed purchases and destinations,
 but the trading credentials are never loaded and nothing is submitted. Typing
 `Live` executes the displayed buy-only plan and withdrawals after all safety
-checks pass.
+checks pass. Enter a deposit amount of `0` to skip the Bitvavo workflow and run
+a read-only portfolio check showing current allocations and rebalance status.
 
 For a non-interactive, zero-deposit portfolio check, use:
 
@@ -93,7 +94,8 @@ For a non-interactive, zero-deposit portfolio check, use:
 python main.py --no-prompt
 ```
 
-A successful check sends the report to Telegram by default. Use
+A successful check sends the report, a dark-mode EUR balance/allocation chart,
+and the portfolio performance image to Telegram by default. Use
 `--no-telegram` only for local troubleshooting. You can also override the
 estimated fee rate or export JSON:
 

@@ -14,6 +14,7 @@ from html import escape
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from .charts import render_performance_chart
 from .models import ASSETS, ZERO, Holdings, PriceBook, decimal_map
 
 
@@ -40,6 +41,7 @@ class PerformanceSummary:
     data_path: Path
     value_chart_path: Path
     returns_chart_path: Path
+    performance_image_path: Path
     csv_path: Path
 
     @property
@@ -66,6 +68,7 @@ class PerformanceSummary:
             "data_path": str(self.data_path),
             "value_chart_path": str(self.value_chart_path),
             "returns_chart_path": str(self.returns_chart_path),
+            "performance_image_path": str(self.performance_image_path),
             "csv_path": str(self.csv_path),
         }
 
@@ -969,10 +972,11 @@ def _write_exports(
     observations: list[dict[str, object]],
     chart_dir: Path,
     start_date: date,
-) -> tuple[Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path]:
     value_path = chart_dir / "portfolio_value.svg"
     returns_path = chart_dir / "portfolio_returns.svg"
     csv_path = chart_dir / "portfolio_performance.csv"
+    performance_image_path = chart_dir / "portfolio_performance.png"
     subtitle = (
         f"Buy-and-hold benchmark initialized {start_date.isoformat()} · "
         f"{len(observations)} observation"
@@ -988,6 +992,12 @@ def _write_exports(
             formatter=_format_euros,
             include_zero=False,
         ),
+    )
+    render_performance_chart(
+        actual=_points(observations, "actual_value_eur"),
+        benchmark=_points(observations, "buy_hold_value_eur"),
+        start_date=start_date.isoformat(),
+        path=performance_image_path,
     )
     _atomic_write(
         returns_path,
@@ -1041,7 +1051,7 @@ def _write_exports(
             ]
         )
     _atomic_write(csv_path, output.getvalue())
-    return value_path, returns_path, csv_path
+    return value_path, returns_path, performance_image_path, csv_path
 
 
 def _summary(
@@ -1051,6 +1061,7 @@ def _summary(
     data_path: Path,
     value_chart_path: Path,
     returns_chart_path: Path,
+    performance_image_path: Path,
     csv_path: Path,
 ) -> PerformanceSummary:
     latest = observations[-1]
@@ -1089,6 +1100,7 @@ def _summary(
         data_path=data_path,
         value_chart_path=value_chart_path,
         returns_chart_path=returns_chart_path,
+        performance_image_path=performance_image_path,
         csv_path=csv_path,
     )
 
@@ -1244,7 +1256,7 @@ def record_rebalance(
                 raise ValueError(
                     "A different observation already exists at this timestamp"
                 )
-            value_path, returns_path, csv_path = _write_exports(
+            value_path, returns_path, performance_image_path, csv_path = _write_exports(
                 observations=observations,
                 chart_dir=chart_dir,
                 start_date=start_date,
@@ -1255,6 +1267,7 @@ def record_rebalance(
                 data_path=data_path,
                 value_chart_path=value_path,
                 returns_chart_path=returns_path,
+                performance_image_path=performance_image_path,
                 csv_path=csv_path,
             )
 
@@ -1400,7 +1413,7 @@ def record_rebalance(
     payload["observations"] = observations
     payload["cash_flows"] = cash_flows
     _atomic_write(data_path, json.dumps(payload, indent=2) + "\n")
-    value_path, returns_path, csv_path = _write_exports(
+    value_path, returns_path, performance_image_path, csv_path = _write_exports(
         observations=observations,
         chart_dir=chart_dir,
         start_date=start_date,
@@ -1411,6 +1424,7 @@ def record_rebalance(
         data_path=data_path,
         value_chart_path=value_path,
         returns_chart_path=returns_path,
+        performance_image_path=performance_image_path,
         csv_path=csv_path,
     )
 
@@ -1446,6 +1460,7 @@ def render_performance(summary: PerformanceSummary) -> str:
             f"History: {summary.data_path}",
             f"Values chart: {summary.value_chart_path}",
             f"Returns chart: {summary.returns_chart_path}",
+            f"Performance image: {summary.performance_image_path}",
             f"CSV export: {summary.csv_path}",
         ]
     )

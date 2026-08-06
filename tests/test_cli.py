@@ -5,8 +5,9 @@ import os
 import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from wallet_rebalancer.cli import (
     _bitvavo_top_up_command,
@@ -67,15 +68,35 @@ class InteractiveBitvavoPromptTests(unittest.TestCase):
 
         self.assertIn("enter Demo or Live", stderr.getvalue())
 
-    def test_deposit_amount_must_be_positive(self) -> None:
+    def test_deposit_amount_can_be_zero(self) -> None:
         stderr = io.StringIO()
         with (
-            patch("builtins.input", side_effect=["", "0", "250.50"]),
+            patch("builtins.input", side_effect=["", "-1", "0"]),
             patch("sys.stderr", stderr),
         ):
-            self.assertEqual(_prompt_bitvavo_amount(), Decimal("250.50"))
+            self.assertEqual(_prompt_bitvavo_amount(), Decimal("0"))
 
         self.assertEqual(stderr.getvalue().count("Invalid amount:"), 2)
+
+    def test_zero_deposit_runs_read_only_portfolio_check(self) -> None:
+        with (
+            patch("wallet_rebalancer.cli._prompt_bitvavo_mode", return_value=True),
+            patch(
+                "wallet_rebalancer.cli._prompt_bitvavo_amount",
+                return_value=Decimal("0"),
+            ),
+            patch(
+                "wallet_rebalancer.cli._check_command",
+                return_value=0,
+            ) as check,
+            patch("wallet_rebalancer.cli._bitvavo_top_up_command") as top_up,
+        ):
+            self.assertEqual(_interactive_bitvavo_command(), 0)
+
+        args = check.call_args.args[0]
+        self.assertTrue(args.no_prompt)
+        self.assertFalse(args.no_telegram)
+        top_up.assert_not_called()
 
     def test_interactive_answers_become_bitvavo_arguments(self) -> None:
         with (
@@ -281,6 +302,56 @@ class TrackingCommandTests(unittest.TestCase):
             self.assertEqual(_check_command(args), 0)
 
         track.assert_called_once()
+
+    def test_check_sends_allocation_and_performance_images(self) -> None:
+        args = build_parser().parse_args(["check", "--no-prompt"])
+        plan = self._portfolio_plan()
+        summary = SimpleNamespace(
+            performance_image_path=Path("reports/portfolio_performance.png")
+        )
+        allocation_path = Path("reports/portfolio_allocation.png")
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "test-token:secret",
+            "TELEGRAM_CHAT_ID": "123456",
+        }
+
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch("wallet_rebalancer.cli.load_config", return_value=object()),
+            patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
+            patch(
+                "wallet_rebalancer.cli._track_plan_snapshot",
+                return_value=summary,
+            ),
+            patch(
+                "wallet_rebalancer.cli.render_allocation_chart",
+                return_value=allocation_path,
+            ),
+            patch("wallet_rebalancer.cli.render_text", return_value="report"),
+            patch(
+                "wallet_rebalancer.cli.render_order_message",
+                return_value="orders",
+            ),
+            patch("wallet_rebalancer.cli.TelegramClient") as client_class,
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertEqual(_check_command(args), 0)
+
+        self.assertEqual(
+            client_class.return_value.send_photo.call_args_list,
+            [
+                call(
+                    "123456",
+                    allocation_path,
+                    caption="Current balances vs desired allocation",
+                ),
+                call(
+                    "123456",
+                    summary.performance_image_path,
+                    caption="Portfolio performance vs buy-and-hold",
+                ),
+            ],
+        )
 
     def test_deposit_uses_configured_fee_rate_by_default(self) -> None:
         args = build_parser().parse_args(

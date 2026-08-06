@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -71,6 +72,33 @@ class TelegramClient:
             if parse_mode is not None:
                 payload["parse_mode"] = parse_mode
             self._call("sendMessage", payload=payload)
+
+    def send_photo(
+        self,
+        chat_id: int | str,
+        path: Path,
+        *,
+        caption: str | None = None,
+    ) -> None:
+        """Upload a PNG/JPEG image to a Telegram chat."""
+
+        payload: dict[str, object] = {"chat_id": chat_id}
+        if caption:
+            payload["caption"] = caption
+        try:
+            with path.open("rb") as photo:
+                response = self._session.post(
+                    f"{self._base_url}/sendPhoto",
+                    data=payload,
+                    files={"photo": (path.name, photo, "image/png")},
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                body = response.json()
+        except (OSError, requests.RequestException, ValueError) as exc:
+            raise TelegramError("Telegram sendPhoto failed; token omitted") from exc
+        if not isinstance(body, dict) or not body.get("ok"):
+            raise TelegramError("Telegram sendPhoto returned an API error")
 
     def get_updates(
         self,

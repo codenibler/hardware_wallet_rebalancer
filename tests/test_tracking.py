@@ -61,6 +61,11 @@ class PortfolioTrackingTests(unittest.TestCase):
         self.assertEqual(summary.observations, 1)
         self.assertTrue(summary.value_chart_path.exists())
         self.assertTrue(summary.returns_chart_path.exists())
+        self.assertTrue(summary.performance_image_path.exists())
+        self.assertEqual(
+            summary.performance_image_path.read_bytes()[:8],
+            b"\x89PNG\r\n\x1a\n",
+        )
         self.assertTrue(summary.csv_path.exists())
 
         payload = json.loads(self.data_path.read_text(encoding="utf-8"))
