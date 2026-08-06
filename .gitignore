@@ -9,4 +9,6 @@ build/
 
 # Local wallet identifiers and credentials must never be committed.
 .env
+.env.*
+!.env.example
 reports/

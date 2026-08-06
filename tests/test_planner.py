@@ -4,18 +4,13 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from wallet_rebalancer.exchange_scanner import (
-    ExchangeQuote,
-    VenueMarketSnapshot,
-)
-from wallet_rebalancer.models import Holdings, PriceBook
-from wallet_rebalancer.planner import build_plan
+from wallet_rebalancer.models import ZERO, Holdings, PriceBook
+from wallet_rebalancer.planner import build_buy_only_plan, build_plan
 from wallet_rebalancer.reporting import (
     plan_to_dict,
     render_order_message,
     render_text,
 )
-
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
 UNIT_PRICES = PriceBook(
@@ -26,6 +21,53 @@ UNIT_PRICES = PriceBook(
 
 
 class PlannerTests(unittest.TestCase):
+    def test_buy_only_plan_never_sells_overweight_assets(self) -> None:
+        plan = build_buy_only_plan(
+            Holdings(
+                amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="100",
+        )
+
+        self.assertTrue(all(trade.side == "BUY" for trade in plan.trades))
+        self.assertEqual(
+            {trade.asset: trade.notional_eur for trade in plan.trades},
+            {"ETH": Decimal("50"), "SOL": Decimal("50")},
+        )
+        self.assertEqual(plan.estimated_fees_eur, Decimal("0"))
+
+    def test_buy_only_plan_raises_lowest_sleeves_first(self) -> None:
+        plan = build_buy_only_plan(
+            Holdings(
+                amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="50",
+        )
+
+        self.assertEqual(
+            {trade.asset: trade.notional_eur for trade in plan.trades},
+            {"ETH": Decimal("18.75"), "SOL": Decimal("31.25")},
+        )
+
+    def test_buy_only_plan_reserves_estimated_fees(self) -> None:
+        plan = build_buy_only_plan(
+            Holdings(
+                amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="100",
+            estimated_fee_bps="25",
+        )
+
+        buys = sum((trade.notional_eur for trade in plan.trades), ZERO)
+        self.assertEqual(buys + plan.estimated_fees_eur, Decimal("100"))
+        self.assertTrue(all(trade.side == "BUY" for trade in plan.trades))
+
     def test_balanced_portfolio_needs_no_rebalance(self) -> None:
         plan = build_plan(
             Holdings(
@@ -138,108 +180,6 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("No rebalancing trades are needed.", message)
         self.assertNotIn("out of balance", message)
         self.assertNotIn("Estimated total fees", message)
-
-    def test_telegram_orders_include_ranked_buy_and_sell_venues(self) -> None:
-        plan = build_plan(
-            Holdings(
-                amounts={"BTC": 800, "ETH": 100, "SOL": 50, "LINK": 50},
-                fetched_at=NOW,
-            ),
-            UNIT_PRICES,
-            threshold="0.05",
-            estimated_fee_bps="50",
-        )
-
-        def quote(
-            asset: str,
-            exchange_id: str,
-            exchange_name: str,
-            ask: str,
-            bid: str,
-        ) -> ExchangeQuote:
-            return ExchangeQuote(
-                asset=asset,
-                exchange_id=exchange_id,
-                exchange_name=exchange_name,
-                pair=f"{asset}-EUR",
-                ask_eur=Decimal(ask),
-                ask_size=Decimal("1000"),
-                bid_eur=Decimal(bid),
-                bid_size=Decimal("1000"),
-                taker_fee_bps=Decimal("10"),
-                quoted_at=NOW,
-                trade_url="https://example.test",
-            )
-
-        venues = VenueMarketSnapshot(
-            as_of=NOW,
-            quotes={
-                asset: (
-                    quote(asset, "low_ask", "Low Ask", "0.99", "0.96"),
-                    quote(asset, "middle", "Middle", "1.00", "0.97"),
-                    quote(asset, "high_bid", "High Bid", "1.01", "0.98"),
-                )
-                for asset in ("BTC", "ETH", "SOL", "LINK")
-            },
-            failures=(),
-        )
-
-        message = render_order_message(plan, venues=venues)
-
-        self.assertIn("venue=High Bid", message)
-        self.assertIn("venue=Low Ask", message)
-        self.assertNotIn("reason=", message)
-        self.assertIn(
-            "Top venues: 1) High Bid net €0.98/BTC",
-            message,
-        )
-        self.assertIn(
-            "Top venues: 1) Low Ask all-in €0.99/ETH",
-            message,
-        )
-        self.assertIn("Estimated total trading fees:", message)
-        self.assertIn("(recommended venues)", message)
-
-    def test_telegram_marks_provider_costs_as_included_in_quote(self) -> None:
-        plan = build_plan(
-            Holdings(
-                amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
-                fetched_at=NOW,
-            ),
-            UNIT_PRICES,
-            top_up_eur="100",
-        )
-        venues = VenueMarketSnapshot(
-            as_of=NOW,
-            quotes={
-                asset: (
-                    ExchangeQuote(
-                        asset=asset,
-                        exchange_id="banxa",
-                        exchange_name="Banxa (SEPA)",
-                        pair=f"{asset}-EUR",
-                        ask_eur=Decimal("1.01"),
-                        ask_size=Decimal("1000"),
-                        bid_eur=Decimal("1.01"),
-                        bid_size=Decimal("0"),
-                        taker_fee_bps=Decimal("0"),
-                        quoted_at=NOW,
-                        trade_url="https://banxa.com",
-                        supported_sides=frozenset(("BUY",)),
-                        fee_eur_override=Decimal("0"),
-                        fee_included_in_quote=True,
-                    ),
-                )
-                for asset in ("BTC", "ETH", "SOL", "LINK")
-            },
-            failures=(),
-        )
-
-        message = render_order_message(plan, venues=venues)
-
-        self.assertIn("venue=Banxa (SEPA)", message)
-        self.assertIn("fee=included in quote", message)
-        self.assertIn("Provider-inclusive costs", message)
 
     def test_top_up_required_for_buy_only_is_calculated(self) -> None:
         plan = build_plan(

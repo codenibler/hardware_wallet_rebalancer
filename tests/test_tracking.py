@@ -75,6 +75,10 @@ class PortfolioTrackingTests(unittest.TestCase):
         value_chart = summary.value_chart_path.read_text(encoding="utf-8")
         self.assertIn("Rebalanced", value_chart)
         self.assertIn("Buy &amp; hold", value_chart)
+        self.assertIn('fill="#0f172a"', value_chart)
+        self.assertIn('stroke="#334155"', value_chart)
+        returns_chart = summary.returns_chart_path.read_text(encoding="utf-8")
+        self.assertIn('fill="#0f172a"', returns_chart)
 
     def test_later_record_compares_against_original_fixed_units(self) -> None:
         initial_amounts = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}

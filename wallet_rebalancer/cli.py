@@ -13,10 +13,23 @@ from typing import Sequence
 
 from dotenv import load_dotenv
 
+from .bitvavo import (
+    BitvavoClient,
+    BitvavoExecutionClient,
+    load_bitvavo_config,
+    load_readonly_credentials,
+    load_trading_credentials,
+)
 from .config import AppConfig, load_config
-from .exchange_scanner import ExchangeScanner
-from .models import ZERO, Holdings, PortfolioPlan, PriceBook
-from .planner import build_plan
+from .execution import (
+    DEFAULT_EXECUTION_STATE_PATH,
+    acknowledge_reviewed_run,
+    execute_top_up,
+    prepare_top_up,
+    render_prepared_top_up,
+)
+from .models import ASSETS, ZERO, Holdings, PortfolioPlan, PriceBook
+from .planner import build_buy_only_plan, build_plan
 from .providers import ProviderError, PublicDataClient
 from .reporting import render_json, render_order_message, render_text
 from .telegram import TelegramClient, discover_chats, run_bot
@@ -66,6 +79,48 @@ def _prompt_top_up() -> Decimal:
 
         try:
             return _non_negative_decimal(raw_value.strip())
+        except argparse.ArgumentTypeError as exc:
+            print(f"Invalid amount: {exc}. Please try again.", file=sys.stderr)
+
+
+def _prompt_bitvavo_mode() -> bool:
+    """Return whether the interactive Bitvavo run should execute live."""
+
+    while True:
+        print(
+            "Run mode — Demo or Live? [Demo]: ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            raw_value = input()
+        except EOFError as exc:
+            raise ValueError("No run mode received; enter Demo or Live") from exc
+
+        normalized = raw_value.strip().casefold()
+        if normalized in {"", "demo"}:
+            return False
+        if normalized == "live":
+            return True
+        print("Invalid mode: enter Demo or Live.", file=sys.stderr)
+
+
+def _prompt_bitvavo_amount() -> Decimal:
+    while True:
+        print(
+            "Enter EUR deposit amount: ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            raw_value = input()
+        except EOFError as exc:
+            raise ValueError("No deposit amount received") from exc
+
+        try:
+            return _positive_decimal(raw_value.strip())
         except argparse.ArgumentTypeError as exc:
             print(f"Invalid amount: {exc}. Please try again.", file=sys.stderr)
 
@@ -304,6 +359,57 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit the latest performance summary as JSON",
     )
 
+    bitvavo = subparsers.add_parser(
+        "bitvavo-top-up",
+        help="Buy a EUR top-up on Bitvavo and withdraw it to fixed wallets",
+    )
+    bitvavo.add_argument(
+        "amount",
+        type=_positive_decimal,
+        help="EUR amount already deposited and available on Bitvavo",
+    )
+
+    subparsers.add_parser(
+        "interactive-bitvavo",
+        help="Prompt for Demo/Live mode and a deposited EUR amount",
+    )
+    bitvavo.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Submit irreversible purchases and withdrawals",
+    )
+    bitvavo.add_argument(
+        "--holdings-file",
+        type=Path,
+        help="Use a local JSON amount snapshot instead of live balances",
+    )
+    bitvavo.add_argument(
+        "--prices-file",
+        type=Path,
+        help="Use a local JSON price snapshot instead of CoinGecko",
+    )
+    bitvavo.add_argument(
+        "--state-file",
+        type=Path,
+        default=DEFAULT_EXECUTION_STATE_PATH,
+        help=(
+            "Execution audit and duplicate-protection state "
+            f"(default: {DEFAULT_EXECUTION_STATE_PATH})"
+        ),
+    )
+
+    acknowledge = subparsers.add_parser(
+        "bitvavo-acknowledge",
+        help="Acknowledge a failed Bitvavo run after manually reconciling it",
+    )
+    acknowledge.add_argument("run_id", help="Run UUID shown in execution state")
+    acknowledge.add_argument(
+        "--state-file",
+        type=Path,
+        default=DEFAULT_EXECUTION_STATE_PATH,
+        help=f"Execution state file (default: {DEFAULT_EXECUTION_STATE_PATH})",
+    )
+
     return parser
 
 
@@ -312,22 +418,6 @@ def _require_env(name: str) -> str:
     if not value:
         raise ValueError(f"{name} is not configured")
     return value
-
-
-def _render_orders_with_venues(
-    plan,
-    *,
-    invity_account_descriptor: str,
-) -> str:
-    if not getattr(plan, "trades", ()):
-        return render_order_message(plan)
-    try:
-        venues = ExchangeScanner(
-            invity_account_descriptor=invity_account_descriptor,
-        ).fetch_markets(trades=plan.trades)
-    except (RuntimeError, ValueError) as exc:
-        return render_order_message(plan, venue_error=str(exc))
-    return render_order_message(plan, venues=venues)
 
 
 def _track_plan_snapshot(plan: PortfolioPlan) -> None:
@@ -368,10 +458,7 @@ def _check_command(args: argparse.Namespace) -> int:
         chat_id = _require_env("TELEGRAM_CHAT_ID")
         TelegramClient(token).send_message(
             chat_id,
-            _render_orders_with_venues(
-                plan,
-                invity_account_descriptor=config.wallet.bitcoin_xpubs[0],
-            ),
+            render_order_message(plan),
             parse_mode="HTML",
         )
     return 0
@@ -410,9 +497,8 @@ def _bot_command(args: argparse.Namespace) -> int:
         ) from exc
 
     def check_callback(top_up: Decimal) -> str:
-        return _render_orders_with_venues(
-            _plan_from_args(args, config, top_up_override=top_up),
-            invity_account_descriptor=config.wallet.bitcoin_xpubs[0],
+        return render_order_message(
+            _plan_from_args(args, config, top_up_override=top_up)
         )
 
     print("Telegram bot is running. Press Ctrl-C to stop.")
@@ -454,6 +540,75 @@ def _track_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _bitvavo_top_up_command(args: argparse.Namespace) -> int:
+    config = load_config()
+    bitvavo_config = load_bitvavo_config()
+    if args.amount > bitvavo_config.max_top_up_eur:
+        raise ValueError(
+            f"Top-up €{args.amount} exceeds HWR_BITVAVO_MAX_TOP_UP_EUR="
+            f"€{bitvavo_config.max_top_up_eur}"
+        )
+
+    read_client = BitvavoClient(
+        bitvavo_config,
+        load_readonly_credentials(),
+    )
+    fee_bps = max(
+        read_client.get_market_fee_bps(asset) for asset in ASSETS
+    )
+    holdings, prices = _portfolio_inputs(args, config)
+    plan = build_buy_only_plan(
+        holdings,
+        prices,
+        top_up_eur=args.amount,
+        threshold=config.policy.threshold,
+        estimated_fee_bps=fee_bps,
+        target_weights=config.policy.target_weights,
+    )
+    prepared = prepare_top_up(read_client, bitvavo_config, plan)
+    print(render_prepared_top_up(prepared))
+    if not args.confirm:
+        print(
+            "DRY RUN: no orders or withdrawals were submitted. "
+            "Run main.py again and select Live when you are ready."
+        )
+        return 0
+
+    execution_client = BitvavoExecutionClient(
+        bitvavo_config,
+        load_trading_credentials(),
+    )
+    result = execute_top_up(
+        read_client,
+        execution_client,
+        prepared,
+        state_path=args.state_file,
+    )
+    print(f"Completed Bitvavo run {result.run_id}.")
+    for asset, amount in result.withdrawn_amounts.items():
+        print(f"  {asset}: withdrawal submitted for {amount}")
+    return 0
+
+
+def _interactive_bitvavo_command() -> int:
+    confirm = _prompt_bitvavo_mode()
+    amount = _prompt_bitvavo_amount()
+    args = argparse.Namespace(
+        amount=amount,
+        confirm=confirm,
+        holdings_file=None,
+        prices_file=None,
+        state_file=DEFAULT_EXECUTION_STATE_PATH,
+    )
+    return _bitvavo_top_up_command(args)
+
+
+def _bitvavo_acknowledge_command(args: argparse.Namespace) -> int:
+    acknowledge_reviewed_run(args.state_file, args.run_id)
+    print(f"Acknowledged reviewed Bitvavo run {args.run_id}.")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
@@ -466,6 +621,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _bot_command(args)
         if args.command == "track":
             return _track_command(args)
+        if args.command == "bitvavo-top-up":
+            return _bitvavo_top_up_command(args)
+        if args.command == "interactive-bitvavo":
+            return _interactive_bitvavo_command()
+        if args.command == "bitvavo-acknowledge":
+            return _bitvavo_acknowledge_command(args)
         raise AssertionError("unreachable")
     except (
         FileNotFoundError,

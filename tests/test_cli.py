@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import io
 import os
 import unittest
@@ -10,11 +9,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wallet_rebalancer.cli import (
+    _bitvavo_top_up_command,
     _check_command,
+    _interactive_bitvavo_command,
+    _prompt_bitvavo_amount,
+    _prompt_bitvavo_mode,
     _prompt_top_up,
     _track_command,
     build_parser,
 )
+from wallet_rebalancer.execution import DEFAULT_EXECUTION_STATE_PATH
 from wallet_rebalancer.models import AssetPlan, PortfolioPlan
 
 
@@ -43,6 +47,54 @@ class PromptTopUpTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "--no-prompt"):
                 _prompt_top_up()
+
+
+class InteractiveBitvavoPromptTests(unittest.TestCase):
+    def test_demo_is_the_safe_default(self) -> None:
+        with (
+            patch("builtins.input", return_value=""),
+            patch("sys.stderr", new_callable=io.StringIO),
+        ):
+            self.assertFalse(_prompt_bitvavo_mode())
+
+    def test_live_must_be_typed_explicitly(self) -> None:
+        stderr = io.StringIO()
+        with (
+            patch("builtins.input", side_effect=["yes", "LIVE"]),
+            patch("sys.stderr", stderr),
+        ):
+            self.assertTrue(_prompt_bitvavo_mode())
+
+        self.assertIn("enter Demo or Live", stderr.getvalue())
+
+    def test_deposit_amount_must_be_positive(self) -> None:
+        stderr = io.StringIO()
+        with (
+            patch("builtins.input", side_effect=["", "0", "250.50"]),
+            patch("sys.stderr", stderr),
+        ):
+            self.assertEqual(_prompt_bitvavo_amount(), Decimal("250.50"))
+
+        self.assertEqual(stderr.getvalue().count("Invalid amount:"), 2)
+
+    def test_interactive_answers_become_bitvavo_arguments(self) -> None:
+        with (
+            patch("wallet_rebalancer.cli._prompt_bitvavo_mode", return_value=True),
+            patch(
+                "wallet_rebalancer.cli._prompt_bitvavo_amount",
+                return_value=Decimal("250"),
+            ),
+            patch(
+                "wallet_rebalancer.cli._bitvavo_top_up_command",
+                return_value=0,
+            ) as top_up,
+        ):
+            self.assertEqual(_interactive_bitvavo_command(), 0)
+
+        args = top_up.call_args.args[0]
+        self.assertEqual(args.amount, Decimal("250"))
+        self.assertTrue(args.confirm)
+        self.assertEqual(args.state_file, DEFAULT_EXECUTION_STATE_PATH)
 
 
 class CheckArgumentTests(unittest.TestCase):
@@ -104,6 +156,77 @@ class CheckArgumentTests(unittest.TestCase):
             self.assertRaises(SystemExit),
         ):
             build_parser().parse_args(["track", "--start-date", "July 28"])
+
+    def test_bitvavo_top_up_is_preview_only_by_default(self) -> None:
+        args = build_parser().parse_args(["bitvavo-top-up", "250"])
+
+        self.assertEqual(args.amount, Decimal("250"))
+        self.assertFalse(args.confirm)
+        self.assertEqual(
+            str(args.state_file),
+            "reports/bitvavo_executions.json",
+        )
+
+    def test_bitvavo_top_up_requires_positive_amount(self) -> None:
+        with (
+            patch("sys.stderr", new_callable=io.StringIO),
+            self.assertRaises(SystemExit),
+        ):
+            build_parser().parse_args(["bitvavo-top-up", "0", "--confirm"])
+
+
+class BitvavoCommandTests(unittest.TestCase):
+    def test_preview_never_loads_trading_credentials(self) -> None:
+        args = build_parser().parse_args(["bitvavo-top-up", "250"])
+        app_config = SimpleNamespace(
+            policy=SimpleNamespace(
+                threshold=Decimal("0.05"),
+                target_weights={"BTC": Decimal("1")},
+            )
+        )
+        bitvavo_config = SimpleNamespace(max_top_up_eur=Decimal("1000"))
+        read_client = SimpleNamespace(
+            get_market_fee_bps=lambda asset: Decimal("25")
+        )
+
+        with (
+            patch("wallet_rebalancer.cli.load_config", return_value=app_config),
+            patch(
+                "wallet_rebalancer.cli.load_bitvavo_config",
+                return_value=bitvavo_config,
+            ),
+            patch(
+                "wallet_rebalancer.cli.load_readonly_credentials",
+                return_value=object(),
+            ),
+            patch("wallet_rebalancer.cli.load_trading_credentials") as trading,
+            patch(
+                "wallet_rebalancer.cli.BitvavoClient",
+                return_value=read_client,
+            ),
+            patch("wallet_rebalancer.cli.BitvavoExecutionClient") as executor,
+            patch(
+                "wallet_rebalancer.cli._portfolio_inputs",
+                return_value=(object(), object()),
+            ),
+            patch(
+                "wallet_rebalancer.cli.build_buy_only_plan",
+                return_value=object(),
+            ),
+            patch(
+                "wallet_rebalancer.cli.prepare_top_up",
+                return_value=object(),
+            ),
+            patch(
+                "wallet_rebalancer.cli.render_prepared_top_up",
+                return_value="preview",
+            ),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertEqual(_bitvavo_top_up_command(args), 0)
+
+        trading.assert_not_called()
+        executor.assert_not_called()
 
 
 class TrackingCommandTests(unittest.TestCase):
@@ -274,77 +397,6 @@ class TelegramDeliveryTests(unittest.TestCase):
             self.assertEqual(_check_command(args), 0)
 
         client_class.assert_not_called()
-
-    def test_trade_plan_scans_venues_before_telegram_delivery(self) -> None:
-        args = build_parser().parse_args(["check", "--no-prompt"])
-        environment = {
-            "TELEGRAM_BOT_TOKEN": "test-token:secret",
-            "TELEGRAM_CHAT_ID": "123456",
-        }
-        plan = SimpleNamespace(trades=(object(),))
-        venue_snapshot = object()
-
-        with (
-            patch.dict(os.environ, environment, clear=True),
-            patch(
-                "wallet_rebalancer.cli.load_config",
-                return_value=self._config(),
-            ),
-            patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
-            patch("wallet_rebalancer.cli.render_text", return_value="report"),
-            patch("wallet_rebalancer.cli.ExchangeScanner") as scanner_class,
-            patch(
-                "wallet_rebalancer.cli.render_order_message",
-                return_value="orders with venues",
-            ) as render_orders,
-            patch("wallet_rebalancer.cli.TelegramClient"),
-            patch("sys.stdout", new_callable=io.StringIO),
-        ):
-            scanner_class.return_value.fetch_markets.return_value = venue_snapshot
-            self.assertEqual(_check_command(args), 0)
-
-        scanner_class.assert_called_once_with(
-            invity_account_descriptor="xpub-test",
-        )
-        scanner_class.return_value.fetch_markets.assert_called_once_with(
-            trades=plan.trades,
-        )
-        render_orders.assert_called_once_with(plan, venues=venue_snapshot)
-
-    def test_venue_failure_does_not_block_portfolio_message(self) -> None:
-        args = build_parser().parse_args(["check", "--no-prompt"])
-        environment = {
-            "TELEGRAM_BOT_TOKEN": "test-token:secret",
-            "TELEGRAM_CHAT_ID": "123456",
-        }
-        plan = SimpleNamespace(trades=(object(),))
-
-        with (
-            patch.dict(os.environ, environment, clear=True),
-            patch(
-                "wallet_rebalancer.cli.load_config",
-                return_value=self._config(),
-            ),
-            patch("wallet_rebalancer.cli._plan_from_args", return_value=plan),
-            patch("wallet_rebalancer.cli.render_text", return_value="report"),
-            patch("wallet_rebalancer.cli.ExchangeScanner") as scanner_class,
-            patch(
-                "wallet_rebalancer.cli.render_order_message",
-                return_value="orders without venues",
-            ) as render_orders,
-            patch("wallet_rebalancer.cli.TelegramClient"),
-            patch("sys.stdout", new_callable=io.StringIO),
-        ):
-            scanner_class.return_value.fetch_markets.side_effect = RuntimeError(
-                "market data unavailable"
-            )
-            self.assertEqual(_check_command(args), 0)
-
-        render_orders.assert_called_once_with(
-            plan,
-            venue_error="market data unavailable",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

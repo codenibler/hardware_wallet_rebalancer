@@ -885,13 +885,13 @@ def _line_chart(
             f'role="img" aria-label="{escape(title)}">'
         ),
         "<style>"
-        "text{font-family:Inter,ui-sans-serif,system-ui,sans-serif;fill:#334155}"
-        ".title{font-size:24px;font-weight:700;fill:#0f172a}"
-        ".subtitle{font-size:13px;fill:#64748b}"
-        ".axis{font-size:12px;fill:#64748b}"
-        ".legend{font-size:13px;font-weight:600}"
+        "text{font-family:Inter,ui-sans-serif,system-ui,sans-serif;fill:#e2e8f0}"
+        ".title{font-size:24px;font-weight:700;fill:#f8fafc}"
+        ".subtitle{font-size:13px;fill:#cbd5e1}"
+        ".axis{font-size:12px;fill:#94a3b8}"
+        ".legend{font-size:13px;font-weight:600;fill:#e2e8f0}"
         "</style>",
-        f'<rect width="{width}" height="{height}" rx="16" fill="#ffffff"/>',
+        f'<rect width="{width}" height="{height}" rx="16" fill="#0f172a"/>',
         f'<text x="{left}" y="34" class="title">{escape(title)}</text>',
         f'<text x="{left}" y="58" class="subtitle">{escape(subtitle)}</text>',
     ]
@@ -904,7 +904,7 @@ def _line_chart(
                 (
                     f'<line x1="{left}" y1="{position:.2f}" '
                     f'x2="{left + plot_width}" y2="{position:.2f}" '
-                    'stroke="#e2e8f0" stroke-width="1"/>'
+                    'stroke="#334155" stroke-width="1"/>'
                 ),
                 (
                     f'<text x="{left - 12}" y="{position + 4:.2f}" '
@@ -922,7 +922,7 @@ def _line_chart(
                 (
                     f'<line x1="{position:.2f}" y1="{top + plot_height}" '
                     f'x2="{position:.2f}" y2="{top + plot_height + 6}" '
-                    'stroke="#94a3b8"/>'
+                    'stroke="#64748b"/>'
                 ),
                 (
                     f'<text x="{position:.2f}" y="{top + plot_height + 26}" '
@@ -944,7 +944,7 @@ def _line_chart(
         for index, (_, value) in enumerate(points):
             elements.append(
                 f'<circle cx="{x(index):.2f}" cy="{y(value):.2f}" r="4" '
-                f'fill="#ffffff" stroke="{color}" stroke-width="2"/>'
+                f'fill="#0f172a" stroke="{color}" stroke-width="2"/>'
             )
         legend_x = left + plot_width - (230 if label == "Rebalanced" else 105)
         elements.extend(
