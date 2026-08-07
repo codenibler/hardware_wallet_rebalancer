@@ -10,8 +10,9 @@ from wallet_rebalancer.config import load_config
 VALID_ENV = {
     "HWR_BITCOIN_XPUBS": "xpubTestPublicAccount",
     "HWR_ETHEREUM_ADDRESSES": "0x1111111111111111111111111111111111111111",
+    "STAKED_ETHEREUM_ADDRESSES": "",
     "HWR_SOLANA_ADDRESSES": "11111111111111111111111111111111",
-    "HWR_SOLANA_STAKE_ACCOUNTS": "",
+    "STAKED_SOLANA_ADDRESSES": "",
 }
 
 
@@ -43,6 +44,38 @@ class ConfigTests(unittest.TestCase):
             ("xpubFirst", "xpubSecond"),
         )
         self.assertEqual(len(config.wallet.ethereum_addresses), 2)
+
+    def test_staked_ethereum_addresses_load(self) -> None:
+        address = "0x2222222222222222222222222222222222222222"
+        config = self.load_with_env(STAKED_ETHEREUM_ADDRESSES=address)
+
+        self.assertEqual(config.wallet.staked_ethereum_addresses, (address,))
+
+    def test_staked_ethereum_address_cannot_duplicate_regular_address(self) -> None:
+        with self.assertRaisesRegex(ValueError, "staked address"):
+            self.load_with_env(
+                STAKED_ETHEREUM_ADDRESSES=(
+                    "0x1111111111111111111111111111111111111111"
+                )
+            )
+
+    def test_staked_solana_addresses_load(self) -> None:
+        address = "11111111111111111111111111111112"
+        config = self.load_with_env(STAKED_SOLANA_ADDRESSES=address)
+
+        self.assertEqual(config.wallet.solana_stake_accounts, (address,))
+
+    def test_staked_solana_address_cannot_duplicate_regular_address(self) -> None:
+        with self.assertRaisesRegex(ValueError, "stake account"):
+            self.load_with_env(
+                STAKED_SOLANA_ADDRESSES="11111111111111111111111111111111"
+            )
+
+    def test_legacy_solana_stake_variable_remains_supported(self) -> None:
+        address = "11111111111111111111111111111112"
+        config = self.load_with_env(HWR_SOLANA_STAKE_ACCOUNTS=address)
+
+        self.assertEqual(config.wallet.solana_stake_accounts, (address,))
 
     def test_missing_required_identifier_is_rejected(self) -> None:
         environment = dict(VALID_ENV)

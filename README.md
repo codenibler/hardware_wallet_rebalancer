@@ -51,8 +51,9 @@ Fill in `.env`. Multiple wallet identifiers are comma-separated:
 ```dotenv
 HWR_BITCOIN_XPUBS=xpub_or_zpub_here
 HWR_ETHEREUM_ADDRESSES=0x_address_here
+STAKED_ETHEREUM_ADDRESSES=
 HWR_SOLANA_ADDRESSES=solana_address_here
-HWR_SOLANA_STAKE_ACCOUNTS=
+STAKED_SOLANA_ADDRESSES=
 TELEGRAM_BOT_TOKEN=botfather_token
 TELEGRAM_CHAT_ID=numeric_chat_id
 ```
@@ -61,9 +62,12 @@ Fill in env vars with XPUBS from Trezor Suite / other hardware wallets. For thes
 - Bitcoin: open each funded account, select **Details**, then **Show public
   key**. Include every used account and account type.
 - Ethereum and LINK: use the verified Ethereum receive address. LINK is read
-  from the official Ethereum-mainnet contract.
+  from the official Ethereum-mainnet contract. Put ETH-only staking wallet
+  addresses in `STAKED_ETHEREUM_ADDRESSES`; their native ETH is included in
+  both performance tracking and rebalance calculations.
 - Solana: use each verified receive address. List delegated stake-account
-  addresses separately in `HWR_SOLANA_STAKE_ACCOUNTS`.
+  addresses separately in `STAKED_SOLANA_ADDRESSES`; their SOL is included in
+  both performance tracking and rebalance calculations.
 
 No pins, recovery seeds, or private keys are stored, so only your account history can be seen if you leak these variables. Still, try to avoid this. 
 

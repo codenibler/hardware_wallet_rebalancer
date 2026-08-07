@@ -256,6 +256,27 @@ class PublicDataClient:
                     "Ethereum RPC returned a malformed balance"
                 ) from exc
 
+        for request_id, address in enumerate(
+            self.config.wallet.staked_ethereum_addresses,
+            start=10 + len(self.config.wallet.ethereum_addresses),
+        ):
+            eth_response = self._post_rpc(
+                rpc_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getBalance",
+                    "params": [address, "latest"],
+                },
+                label="Staked Ethereum",
+            )
+            try:
+                total_wei += int(str(eth_response.get("result")), 16)
+            except (TypeError, ValueError) as exc:
+                raise ProviderError(
+                    "Ethereum RPC returned a malformed staked ETH balance"
+                ) from exc
+
         eth = Decimal(total_wei) / WEI_PER_ETH
         link = Decimal(total_link_units) / (Decimal(10) ** link_decimals)
         if eth < ZERO or link < ZERO:

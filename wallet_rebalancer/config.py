@@ -45,6 +45,7 @@ class WalletConfig:
     ethereum_addresses: tuple[str, ...]
     solana_addresses: tuple[str, ...]
     solana_stake_accounts: tuple[str, ...]
+    staked_ethereum_addresses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -177,22 +178,47 @@ def load_config() -> AppConfig:
 
     bitcoin_xpubs = _csv_env("HWR_BITCOIN_XPUBS", required=True)
     ethereum_addresses = _csv_env("HWR_ETHEREUM_ADDRESSES", required=True)
+    staked_ethereum_addresses = _csv_env(
+        "STAKED_ETHEREUM_ADDRESSES",
+        required=False,
+    )
     solana_addresses = _csv_env("HWR_SOLANA_ADDRESSES", required=True)
-    solana_stake_accounts = _csv_env(
+    staked_solana_addresses = _csv_env(
+        "STAKED_SOLANA_ADDRESSES",
+        required=False,
+    )
+    legacy_solana_stake_accounts = _csv_env(
         "HWR_SOLANA_STAKE_ACCOUNTS",
         required=False,
+    )
+    if staked_solana_addresses and legacy_solana_stake_accounts:
+        raise ValueError(
+            "Use STAKED_SOLANA_ADDRESSES instead of also setting "
+            "HWR_SOLANA_STAKE_ACCOUNTS"
+        )
+    solana_stake_accounts = (
+        staked_solana_addresses or legacy_solana_stake_accounts
     )
 
     if any(not value.startswith(XPUB_PREFIXES) for value in bitcoin_xpubs):
         raise ValueError("HWR_BITCOIN_XPUBS contains an unsupported XPUB prefix")
-    if any(not EVM_ADDRESS_RE.fullmatch(value) for value in ethereum_addresses):
-        raise ValueError("HWR_ETHEREUM_ADDRESSES contains an invalid address")
-    if any(int(value, 16) == 0 for value in ethereum_addresses):
-        raise ValueError("HWR_ETHEREUM_ADDRESSES contains the zero address")
-    if len({value.lower() for value in ethereum_addresses}) != len(
-        ethereum_addresses
-    ):
-        raise ValueError("HWR_ETHEREUM_ADDRESSES contains duplicates")
+    ethereum_address_groups = (
+        ("HWR_ETHEREUM_ADDRESSES", ethereum_addresses),
+        ("STAKED_ETHEREUM_ADDRESSES", staked_ethereum_addresses),
+    )
+    for label, addresses in ethereum_address_groups:
+        if any(not EVM_ADDRESS_RE.fullmatch(value) for value in addresses):
+            raise ValueError(f"{label} contains an invalid address")
+        if any(int(value, 16) == 0 for value in addresses):
+            raise ValueError(f"{label} contains the zero address")
+        if len({value.lower() for value in addresses}) != len(addresses):
+            raise ValueError(f"{label} contains duplicates")
+    if {value.lower() for value in ethereum_addresses} & {
+        value.lower() for value in staked_ethereum_addresses
+    }:
+        raise ValueError(
+            "An Ethereum address cannot also be listed as a staked address"
+        )
     for address in (*solana_addresses, *solana_stake_accounts):
         _validate_solana_address(address, "HWR_SOLANA addresses")
     if set(solana_addresses) & set(solana_stake_accounts):
@@ -243,6 +269,7 @@ def load_config() -> AppConfig:
         wallet=WalletConfig(
             bitcoin_xpubs=bitcoin_xpubs,
             ethereum_addresses=ethereum_addresses,
+            staked_ethereum_addresses=staked_ethereum_addresses,
             solana_addresses=solana_addresses,
             solana_stake_accounts=solana_stake_accounts,
         ),

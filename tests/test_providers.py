@@ -53,8 +53,11 @@ def config() -> AppConfig:
             ethereum_addresses=(
                 "0x1111111111111111111111111111111111111111",
             ),
+            staked_ethereum_addresses=(
+                "0x2222222222222222222222222222222222222222",
+            ),
             solana_addresses=("11111111111111111111111111111111",),
-            solana_stake_accounts=(),
+            solana_stake_accounts=("11111111111111111111111111111112",),
         ),
         providers=ProviderConfig(
             bitcoin_blockbook_url="https://btc.example",
@@ -90,15 +93,19 @@ class ProviderTests(unittest.TestCase):
                 FakeResponse(
                     {"jsonrpc": "2.0", "result": "0x6aaf7c8516d0c0000"}
                 ),
-                FakeResponse({"jsonrpc": "2.0", "result": {"value": 5000000000}})
+                FakeResponse(
+                    {"jsonrpc": "2.0", "result": "0x29a2241af62c0000"}
+                ),
+                FakeResponse({"jsonrpc": "2.0", "result": {"value": 5000000000}}),
+                FakeResponse({"jsonrpc": "2.0", "result": {"value": 7000000000}}),
             ],
         )
         holdings = PublicDataClient(config(), session=session).fetch_holdings()
 
         self.assertEqual(holdings.normalized()["BTC"], Decimal("1.23456789"))
         self.assertEqual(holdings.pending_bitcoin, Decimal("0.00001"))
-        self.assertEqual(holdings.normalized()["ETH"], Decimal("2"))
-        self.assertEqual(holdings.normalized()["SOL"], Decimal("5"))
+        self.assertEqual(holdings.normalized()["ETH"], Decimal("5"))
+        self.assertEqual(holdings.normalized()["SOL"], Decimal("12"))
         self.assertEqual(holdings.normalized()["LINK"], Decimal("123"))
 
     def test_price_response_and_timestamp_are_validated(self) -> None:
