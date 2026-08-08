@@ -13,7 +13,12 @@ from wallet_rebalancer.config import (
     WalletConfig,
 )
 from wallet_rebalancer.models import TARGET_WEIGHTS
-from wallet_rebalancer.providers import ProviderError, PublicDataClient
+from wallet_rebalancer.providers import (
+    EVERSTAKE_STAKE_ADDED_TOPIC,
+    EVERSTAKE_UNSTAKE_TOPIC,
+    ProviderError,
+    PublicDataClient,
+)
 
 
 class FakeResponse:
@@ -83,6 +88,9 @@ class ProviderTests(unittest.TestCase):
                 FakeResponse(
                     {"balance": "123456789", "unconfirmedBalance": "1000"}
                 ),
+                FakeResponse(
+                    {"txids": ["0xeverstake-transaction"], "totalPages": 1}
+                ),
             ],
             posts=[
                 FakeResponse({"jsonrpc": "2.0", "result": "0x1"}),
@@ -94,10 +102,58 @@ class ProviderTests(unittest.TestCase):
                     {"jsonrpc": "2.0", "result": "0x6aaf7c8516d0c0000"}
                 ),
                 FakeResponse(
-                    {"jsonrpc": "2.0", "result": "0x29a2241af62c0000"}
+                    {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "logs": [
+                                {
+                                    "address": "0x2222222222222222222222222222222222222222",
+                                    "topics": [
+                                        EVERSTAKE_STAKE_ADDED_TOPIC,
+                                        (
+                                            "0x000000000000000000000000"
+                                            "1111111111111111111111111111111111111111"
+                                        ),
+                                    ],
+                                    "data": (
+                                        "0x000000000000000000000000000000000000000000000000"
+                                        "29a2241af62c0000"
+                                        "000000000000000000000000000000000000000000000000"
+                                        "0000000000000002"
+                                    ),
+                                }
+                            ]
+                        },
+                    }
                 ),
                 FakeResponse({"jsonrpc": "2.0", "result": {"value": 5000000000}}),
-                FakeResponse({"jsonrpc": "2.0", "result": {"value": 7000000000}}),
+                FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": [{"signature": "sol-everstake-transaction"}],
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "meta": {
+                                "err": None,
+                                "fee": 5000,
+                                "preBalances": [20000000000, 1000000000000],
+                                "postBalances": [12999995000, 1007000005000],
+                            },
+                            "transaction": {
+                                "message": {
+                                    "accountKeys": [
+                                        "11111111111111111111111111111111",
+                                        "11111111111111111111111111111112",
+                                    ]
+                                }
+                            },
+                        },
+                    }
+                ),
             ],
         )
         holdings = PublicDataClient(config(), session=session).fetch_holdings()
@@ -107,6 +163,117 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(holdings.normalized()["ETH"], Decimal("5"))
         self.assertEqual(holdings.normalized()["SOL"], Decimal("12"))
         self.assertEqual(holdings.normalized()["LINK"], Decimal("123"))
+
+    def test_everstake_events_are_filtered_to_the_wallet_and_pool(self) -> None:
+        session = FakeSession(
+            gets=[
+                FakeResponse(
+                    {"txids": ["0xeverstake-transaction"], "totalPages": 1}
+                )
+            ],
+            posts=[
+                FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "logs": [
+                                {
+                                    "address": "0x2222222222222222222222222222222222222222",
+                                    "topics": [
+                                        EVERSTAKE_UNSTAKE_TOPIC,
+                                        (
+                                            "0x000000000000000000000000"
+                                            "1111111111111111111111111111111111111111"
+                                        ),
+                                    ],
+                                    "data": "0x" + f"{10**18:064x}" + f"{2:064x}",
+                                },
+                                {
+                                    "address": "0x2222222222222222222222222222222222222222",
+                                    "topics": [
+                                        EVERSTAKE_STAKE_ADDED_TOPIC,
+                                        (
+                                            "0x000000000000000000000000"
+                                            "1111111111111111111111111111111111111111"
+                                        ),
+                                    ],
+                                    "data": (
+                                        "0x" + f"{3 * 10**18:064x}" + f"{2:064x}"
+                                    ),
+                                },
+                            ]
+                        },
+                    }
+                )
+            ]
+        )
+
+        total = PublicDataClient(config(), session=session)._fetch_everstake_deposited_wei()
+
+        self.assertEqual(total, 2 * 10**18)
+
+    def test_everstake_sol_deltas_net_deposits_against_withdrawals(self) -> None:
+        session = FakeSession(
+            posts=[
+                FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": [
+                            {"signature": "sol-deposit"},
+                            {"signature": "sol-withdrawal"},
+                        ],
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "meta": {
+                                "err": None,
+                                "fee": 5000,
+                                "preBalances": [20000000000, 1000000000000],
+                                "postBalances": [16999995000, 1003000005000],
+                            },
+                            "transaction": {
+                                "message": {
+                                    "accountKeys": [
+                                        "11111111111111111111111111111111",
+                                        "11111111111111111111111111111112",
+                                    ]
+                                }
+                            },
+                        },
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "meta": {
+                                "err": None,
+                                "fee": 7000,
+                                "preBalances": [1003000005000, 16999995000],
+                                "postBalances": [1002000005000, 17999995000],
+                            },
+                            "transaction": {
+                                "message": {
+                                    "accountKeys": [
+                                        "11111111111111111111111111111112",
+                                        "11111111111111111111111111111111",
+                                    ]
+                                }
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+
+        total = PublicDataClient(
+            config(), session=session
+        )._fetch_everstake_sol_deposited_lamports()
+
+        self.assertEqual(total, 2 * 10**9)
 
     def test_price_response_and_timestamp_are_validated(self) -> None:
         now = int(datetime.now(timezone.utc).timestamp())

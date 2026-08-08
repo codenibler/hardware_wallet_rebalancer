@@ -32,6 +32,7 @@ BASE58_INDEX = {
 
 DEFAULT_PROVIDER_URLS = {
     "bitcoin_blockbook_url": "https://btc1.trezor.io",
+    "ethereum_blockbook_url": "https://eth1.trezor.io",
     "ethereum_rpc_url": "https://ethereum-rpc.publicnode.com",
     "solana_rpc_url": "https://api.mainnet-beta.solana.com",
     "coingecko_url": "https://api.coingecko.com/api/v3",
@@ -55,6 +56,9 @@ class ProviderConfig:
     solana_rpc_url: str
     coingecko_url: str
     link_contract: str
+    ethereum_blockbook_url: str = DEFAULT_PROVIDER_URLS[
+        "ethereum_blockbook_url"
+    ]
 
 
 @dataclass(frozen=True)
@@ -275,6 +279,7 @@ def load_config() -> AppConfig:
         ),
         providers=ProviderConfig(
             bitcoin_blockbook_url=_provider_url("bitcoin_blockbook_url"),
+            ethereum_blockbook_url=_provider_url("ethereum_blockbook_url"),
             ethereum_rpc_url=_provider_url("ethereum_rpc_url"),
             solana_rpc_url=_provider_url("solana_rpc_url"),
             coingecko_url=_provider_url("coingecko_url"),

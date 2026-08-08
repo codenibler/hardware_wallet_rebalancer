@@ -62,12 +62,14 @@ Fill in env vars with XPUBS from Trezor Suite / other hardware wallets. For thes
 - Bitcoin: open each funded account, select **Details**, then **Show public
   key**. Include every used account and account type.
 - Ethereum and LINK: use the verified Ethereum receive address. LINK is read
-  from the official Ethereum-mainnet contract. Put ETH-only staking wallet
-  addresses in `STAKED_ETHEREUM_ADDRESSES`; their native ETH is included in
-  both performance tracking and rebalance calculations.
-- Solana: use each verified receive address. List delegated stake-account
-  addresses separately in `STAKED_SOLANA_ADDRESSES`; their SOL is included in
-  both performance tracking and rebalance calculations.
+  from the official Ethereum-mainnet contract. Put the Everstake pool contract
+  in `STAKED_ETHEREUM_ADDRESSES`; net principal from `StakeAdded` and `Unstake`
+  events attributed to your configured Ethereum wallet is included in both
+  performance tracking and rebalance calculations.
+- Solana: use each verified receive address. Put the Everstake pool address
+  in `STAKED_SOLANA_ADDRESSES`; net SOL principal transferred between it and
+  your configured Solana wallet addresses is included in both performance
+  tracking and rebalance calculations.
 
 No pins, recovery seeds, or private keys are stored, so only your account history can be seen if you leak these variables. Still, try to avoid this. 
 
