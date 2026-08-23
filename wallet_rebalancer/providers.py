@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -28,6 +30,7 @@ COINGECKO_IDS = {
 TRANSIENT_HTTP_STATUSES = (429, 500, 502, 503, 504)
 PROVIDER_RETRY_COUNT = 3
 PROVIDER_RETRY_BACKOFF_SECONDS = 1
+PROVIDER_RETRY_METHODS = frozenset(("GET", "POST"))
 EVERSTAKE_STAKE_ADDED_TOPIC = (
     "0x7d194e8dc0f902cdc51bde00649039561dbd0b01574d671bad333436fdac7692"
 )
@@ -59,10 +62,12 @@ class PublicDataClient:
         *,
         session: requests.Session | None = None,
         timeout_seconds: float = 20.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
         self.session = session or self._retrying_session()
         self.timeout_seconds = timeout_seconds
+        self._sleep = sleep
         self.session.headers.update(
             {
                 "User-Agent": (
@@ -82,7 +87,9 @@ class PublicDataClient:
             connect=PROVIDER_RETRY_COUNT,
             read=PROVIDER_RETRY_COUNT,
             status=PROVIDER_RETRY_COUNT,
-            allowed_methods=frozenset(("GET",)),
+            # Every POST made by this read-only client is an idempotent JSON-RPC
+            # query, so retrying it cannot submit a transaction or change state.
+            allowed_methods=PROVIDER_RETRY_METHODS,
             status_forcelist=TRANSIENT_HTTP_STATUSES,
             backoff_factor=PROVIDER_RETRY_BACKOFF_SECONDS,
             respect_retry_after_header=True,
@@ -145,6 +152,16 @@ class PublicDataClient:
             )
             response.raise_for_status()
             data = response.json()
+        except requests.HTTPError as exc:
+            status = (
+                exc.response.status_code
+                if exc.response is not None
+                else None
+            )
+            status_text = f" returned HTTP {status}" if status else " failed"
+            raise ProviderError(
+                f"{label} RPC{status_text}; wallet identifier omitted"
+            ) from exc
         except (requests.RequestException, ValueError) as exc:
             raise ProviderError(
                 f"{label} request failed; wallet identifier omitted"
@@ -152,6 +169,41 @@ class PublicDataClient:
         if not isinstance(data, dict) or data.get("error"):
             raise ProviderError(f"{label} RPC returned an error")
         return data
+
+    def _fetch_transaction_receipt(
+        self,
+        txid: str,
+        *,
+        request_id: int,
+    ) -> dict[str, Any]:
+        """Fetch a receipt, tolerating temporarily unsynchronised RPC nodes."""
+
+        for attempt in range(PROVIDER_RETRY_COUNT + 1):
+            response = self._post_rpc(
+                self.config.providers.ethereum_rpc_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getTransactionReceipt",
+                    "params": [txid],
+                },
+                label="Everstake Ethereum",
+            )
+            receipt = response.get("result")
+            if isinstance(receipt, dict):
+                return receipt
+            if receipt is not None:
+                raise ProviderError(
+                    "Ethereum RPC returned a malformed transaction receipt"
+                )
+            if attempt < PROVIDER_RETRY_COUNT:
+                self._sleep(PROVIDER_RETRY_BACKOFF_SECONDS * (2**attempt))
+
+        attempts = PROVIDER_RETRY_COUNT + 1
+        raise ProviderError(
+            "Ethereum RPC did not return a transaction receipt "
+            f"after {attempts} attempts"
+        )
 
     def fetch_bitcoin(self) -> tuple[Decimal, Decimal]:
         """Return confirmed and net unconfirmed Bitcoin across all XPUBs."""
@@ -313,22 +365,11 @@ class PublicDataClient:
                     if txid in seen_txids:
                         continue
                     seen_txids.add(txid)
-                    response = self._post_rpc(
-                        self.config.providers.ethereum_rpc_url,
-                        {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "method": "eth_getTransactionReceipt",
-                            "params": [txid],
-                        },
-                        label="Everstake Ethereum",
+                    receipt = self._fetch_transaction_receipt(
+                        txid,
+                        request_id=request_id,
                     )
                     request_id += 1
-                    receipt = response.get("result")
-                    if not isinstance(receipt, dict):
-                        raise ProviderError(
-                            "Ethereum RPC returned a malformed transaction receipt"
-                        )
                     logs = receipt.get("logs")
                     if not isinstance(logs, list):
                         raise ProviderError(

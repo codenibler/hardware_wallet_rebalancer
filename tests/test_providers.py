@@ -42,12 +42,14 @@ class FakeSession:
         self.gets = list(gets or [])
         self.posts = list(posts or [])
         self.get_calls = []
+        self.post_calls = []
 
     def get(self, *args, **kwargs):
         self.get_calls.append((args, kwargs))
         return self.gets.pop(0)
 
     def post(self, *args, **kwargs):
+        self.post_calls.append((args, kwargs))
         return self.posts.pop(0)
 
 
@@ -212,6 +214,58 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(total, 2 * 10**18)
 
+    def test_missing_ethereum_receipt_is_retried_with_backoff(self) -> None:
+        session = FakeSession(
+            gets=[
+                FakeResponse(
+                    {"txids": ["0xsensitive-transaction"], "totalPages": 1}
+                )
+            ],
+            posts=[
+                FakeResponse({"jsonrpc": "2.0", "result": None}),
+                FakeResponse(
+                    {"jsonrpc": "2.0", "result": {"logs": []}}
+                ),
+            ],
+        )
+        delays = []
+
+        total = PublicDataClient(
+            config(),
+            session=session,
+            sleep=delays.append,
+        )._fetch_everstake_deposited_wei()
+
+        self.assertEqual(total, 0)
+        self.assertEqual(delays, [1])
+        self.assertEqual(len(session.post_calls), 2)
+
+    def test_missing_ethereum_receipt_fails_after_bounded_retries(self) -> None:
+        session = FakeSession(
+            gets=[
+                FakeResponse(
+                    {"txids": ["0xsensitive-transaction"], "totalPages": 1}
+                )
+            ],
+            posts=[
+                FakeResponse({"jsonrpc": "2.0", "result": None})
+                for _ in range(4)
+            ],
+        )
+        delays = []
+
+        with self.assertRaises(ProviderError) as caught:
+            PublicDataClient(
+                config(),
+                session=session,
+                sleep=delays.append,
+            )._fetch_everstake_deposited_wei()
+
+        self.assertIn("after 4 attempts", str(caught.exception))
+        self.assertNotIn("0xsensitive-transaction", str(caught.exception))
+        self.assertEqual(delays, [1, 2, 4])
+        self.assertEqual(len(session.post_calls), 4)
+
     def test_everstake_sol_deltas_net_deposits_against_withdrawals(self) -> None:
         session = FakeSession(
             posts=[
@@ -301,7 +355,26 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("xpubSensitive", str(caught.exception))
         self.assertNotIn("secret identifier", str(caught.exception))
 
-    def test_default_session_retries_transient_get_failures(self) -> None:
+    def test_rpc_http_error_is_sanitized(self) -> None:
+        session = FakeSession(posts=[FakeResponse({}, status_code=503)])
+
+        with self.assertRaises(ProviderError) as caught:
+            PublicDataClient(config(), session=session)._post_rpc(
+                "https://eth.example/secret-identifier",
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_getBalance",
+                    "params": ["0xsensitive-address", "latest"],
+                },
+                label="Ethereum",
+            )
+
+        self.assertIn("HTTP 503", str(caught.exception))
+        self.assertNotIn("secret-identifier", str(caught.exception))
+        self.assertNotIn("0xsensitive-address", str(caught.exception))
+
+    def test_default_session_retries_transient_read_queries(self) -> None:
         session = PublicDataClient(config()).session
         retry = session.get_adapter("https://").max_retries
 
@@ -309,7 +382,8 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(retry.connect, 3)
         self.assertEqual(retry.read, 3)
         self.assertEqual(retry.status, 3)
-        self.assertEqual(retry.allowed_methods, frozenset(("GET",)))
+        self.assertEqual(retry.allowed_methods, frozenset(("GET", "POST")))
+        self.assertEqual(retry.backoff_factor, 1)
         self.assertEqual(
             retry.status_forcelist,
             (429, 500, 502, 503, 504),

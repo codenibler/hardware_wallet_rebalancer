@@ -73,6 +73,15 @@ Fill in env vars with XPUBS from Trezor Suite / other hardware wallets. For thes
 
 No pins, recovery seeds, or private keys are stored, so only your account history can be seen if you leak these variables. Still, try to avoid this. 
 
+The default blockchain providers are public services and can occasionally be
+rate-limited or return data from a node that is still synchronizing. Read-only
+GET and JSON-RPC POST requests automatically retry transient connection,
+timeout, HTTP 429, and HTTP 5xx failures. Temporarily unavailable Ethereum
+transaction receipts are also retried with exponential backoff. For reliable
+scheduled operation, set `HWR_BITCOIN_BLOCKBOOK_URL`,
+`HWR_ETHEREUM_BLOCKBOOK_URL`, and `HWR_ETHEREUM_RPC_URL` to private or
+authenticated providers implementing the corresponding APIs.
+
 ## Usage
 
 ```bash
