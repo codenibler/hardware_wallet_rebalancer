@@ -34,12 +34,22 @@ class PromptTopUpTests(unittest.TestCase):
     def test_retries_until_amount_is_valid(self) -> None:
         stderr = io.StringIO()
         with (
-            patch("builtins.input", side_effect=["not-a-number", "-1", "1000.25"]),
+            patch("builtins.input", side_effect=["not-a-number", "nan", "1000.25"]),
             patch("sys.stderr", stderr),
         ):
             self.assertEqual(_prompt_top_up(), Decimal("1000.25"))
 
         self.assertEqual(stderr.getvalue().count("Invalid amount:"), 2)
+
+    def test_negative_amount_requests_a_withdrawal(self) -> None:
+        stderr = io.StringIO()
+        with (
+            patch("builtins.input", return_value="-1000.25"),
+            patch("sys.stderr", stderr),
+        ):
+            self.assertEqual(_prompt_top_up(), Decimal("-1000.25"))
+
+        self.assertIn("negative to withdraw", stderr.getvalue())
 
     def test_eof_explains_automation_option(self) -> None:
         with (
@@ -71,12 +81,30 @@ class InteractiveBitvavoPromptTests(unittest.TestCase):
     def test_deposit_amount_can_be_zero(self) -> None:
         stderr = io.StringIO()
         with (
-            patch("builtins.input", side_effect=["", "-1", "0"]),
+            patch("builtins.input", side_effect=["", "nan", "0"]),
             patch("sys.stderr", stderr),
         ):
             self.assertEqual(_prompt_bitvavo_amount(), Decimal("0"))
 
         self.assertEqual(stderr.getvalue().count("Invalid amount:"), 2)
+
+    def test_negative_deposit_runs_a_withdrawal_check(self) -> None:
+        with (
+            patch("wallet_rebalancer.cli._prompt_bitvavo_mode", return_value=True),
+            patch(
+                "wallet_rebalancer.cli._prompt_bitvavo_amount",
+                return_value=Decimal("-250"),
+            ),
+            patch(
+                "wallet_rebalancer.cli._check_command",
+                return_value=0,
+            ) as check,
+            patch("wallet_rebalancer.cli._bitvavo_top_up_command") as top_up,
+        ):
+            self.assertEqual(_interactive_bitvavo_command(), 0)
+
+        self.assertEqual(check.call_args.args[0].top_up, Decimal("-250"))
+        top_up.assert_not_called()
 
     def test_zero_deposit_runs_read_only_portfolio_check(self) -> None:
         with (

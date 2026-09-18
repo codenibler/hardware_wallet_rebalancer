@@ -153,7 +153,10 @@ def run_bot(
     allowed_chat_ids: set[int],
     check_callback: Callable[[Decimal], str],
 ) -> None:
-    """Long-poll for /check [EUR] from explicitly allowlisted chats."""
+    """Long-poll for /check [EUR] from explicitly allowlisted chats.
+
+    A negative amount asks for a withdrawal plan instead of a top-up plan.
+    """
 
     if not allowed_chat_ids:
         raise ValueError("Bot mode requires TELEGRAM_ALLOWED_CHAT_IDS")
@@ -192,8 +195,9 @@ def run_bot(
             if command in {"/start", "/help"}:
                 client.send_message(
                     chat_id,
-                    "Commands:\n/check\n/check 1000\n\n"
-                    "The optional number is new EUR top-up capital.",
+                    "Commands:\n/check\n/check 1000\n/check -1000\n\n"
+                    "The optional number is new EUR top-up capital. "
+                    "Use a negative number to plan a withdrawal instead.",
                 )
                 continue
             if command != "/check":
@@ -203,12 +207,13 @@ def run_bot(
                 continue
             try:
                 top_up = Decimal(parts[1]) if len(parts) == 2 else Decimal("0")
-                if top_up < 0:
+                if not top_up.is_finite():
                     raise InvalidOperation
             except (InvalidOperation, ValueError):
                 client.send_message(
                     chat_id,
-                    "Top-up must be a non-negative number, e.g. /check 1000",
+                    "Top-up must be a number, e.g. /check 1000. "
+                    "Use a negative number to withdraw, e.g. /check -1000",
                 )
                 continue
             try:

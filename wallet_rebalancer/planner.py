@@ -50,6 +50,33 @@ def _solve_fee_adjusted_target(
     return post_trade_total, deltas, fee
 
 
+def _one_sided_capital_bounds(
+    current_values: Mapping[str, Decimal],
+    targets: Mapping[str, Decimal],
+    fee_rate: Decimal,
+) -> tuple[Decimal, Decimal]:
+    """Return the capital changes that make an exact rebalance one-sided.
+
+    A sleeve's level is the total portfolio value it would imply if that sleeve
+    were exactly on target.  Growing the portfolio past the highest level means
+    nothing has to be sold; shrinking it below the lowest level means nothing
+    has to be bought.  Fees are paid out of the portfolio either way, so they
+    raise the top-up needed and reduce the withdrawal needed.
+    """
+
+    levels = [current_values[asset] / targets[asset] for asset in ASSETS]
+    current_total = sum(current_values.values(), ZERO)
+    minimum_top_up_for_buy_only = max(
+        ZERO,
+        max(levels) - current_total,
+    ) * (Decimal("1") + fee_rate)
+    minimum_withdrawal_for_sell_only = max(
+        ZERO,
+        current_total - min(levels),
+    ) * (Decimal("1") - fee_rate)
+    return minimum_top_up_for_buy_only, minimum_withdrawal_for_sell_only
+
+
 def build_plan(
     holdings: Holdings,
     price_book: PriceBook,
@@ -59,7 +86,12 @@ def build_plan(
     estimated_fee_bps: Decimal | str | float = ZERO,
     target_weights: Mapping[str, Decimal] | None = None,
 ) -> PortfolioPlan:
-    """Build a non-executing portfolio rebalance plan from one market snapshot."""
+    """Build a non-executing portfolio rebalance plan from one market snapshot.
+
+    ``top_up_eur`` may be negative to withdraw capital.  The requested cash is
+    released in full and the estimated trading fees are borne by the remaining
+    portfolio, so the sleeves that are left still land exactly on target.
+    """
 
     amounts = holdings.normalized()
     prices = price_book.normalized()
@@ -84,8 +116,6 @@ def build_plan(
         raise ValueError("Planning inputs must be finite")
     if not holdings.pending_bitcoin.is_finite():
         raise ValueError("Pending Bitcoin amount must be finite")
-    if top_up < ZERO:
-        raise ValueError("Top-up amount cannot be negative")
     if threshold_value < ZERO or threshold_value > Decimal("1"):
         raise ValueError("Threshold must be between 0 and 1")
     if fee_bps < ZERO or fee_bps > Decimal("1000"):
@@ -97,6 +127,11 @@ def build_plan(
     current_total = sum(current_values.values(), ZERO)
     if current_total <= ZERO:
         raise ValueError("The current portfolio has no positive market value")
+    if current_total + top_up <= ZERO:
+        raise ValueError(
+            f"Withdrawal of €{-top_up:,.2f} is not funded by the current "
+            f"portfolio value of €{current_total:,.2f}"
+        )
 
     current_weights = {
         asset: current_values[asset] / current_total for asset in ASSETS
@@ -117,17 +152,8 @@ def build_plan(
         fee_rate,
     )
 
-    # A top-up this large expands every target sleeve enough that no current
-    # holding must be sold to reach the target exactly.
-    minimum_buy_only_total = max(
-        current_values[asset] / targets[asset] for asset in ASSETS
-    )
-    minimum_top_up_before_fees = max(
-        ZERO,
-        minimum_buy_only_total - current_total,
-    )
-    minimum_top_up_for_buy_only = minimum_top_up_before_fees * (
-        Decimal("1") + fee_rate
+    minimum_top_up_for_buy_only, minimum_withdrawal_for_sell_only = (
+        _one_sided_capital_bounds(current_values, targets, fee_rate)
     )
 
     asset_rows: list[AssetPlan] = []
@@ -174,6 +200,7 @@ def build_plan(
         max_abs_drift=max_abs_drift,
         threshold_rebalance_needed=threshold_needed,
         minimum_top_up_for_buy_only_eur=minimum_top_up_for_buy_only,
+        minimum_withdrawal_for_sell_only_eur=minimum_withdrawal_for_sell_only,
         prices_as_of=price_book.as_of,
         holdings_as_of=holdings.fetched_at,
         price_source=price_book.source,
@@ -310,13 +337,9 @@ def build_buy_only_plan(
                 )
             )
 
-    minimum_buy_only_total = max(
-        current_values[asset] / targets[asset] for asset in ASSETS
+    minimum_top_up_for_exact_target, minimum_withdrawal_for_sell_only = (
+        _one_sided_capital_bounds(current_values, targets, fee_rate)
     )
-    minimum_top_up_for_exact_target = max(
-        ZERO,
-        minimum_buy_only_total - current_total,
-    ) * (Decimal("1") + fee_rate)
 
     return PortfolioPlan(
         assets=tuple(asset_rows),
@@ -332,6 +355,7 @@ def build_buy_only_plan(
             max_abs_drift > ZERO and max_abs_drift >= threshold_value
         ),
         minimum_top_up_for_buy_only_eur=minimum_top_up_for_exact_target,
+        minimum_withdrawal_for_sell_only_eur=minimum_withdrawal_for_sell_only,
         prices_as_of=price_book.as_of,
         holdings_as_of=holdings.fetched_at,
         price_source=price_book.source,

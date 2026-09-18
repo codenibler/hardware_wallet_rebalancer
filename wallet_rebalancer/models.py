@@ -111,11 +111,26 @@ class PortfolioPlan:
     holdings_as_of: datetime
     price_source: str
     pending_bitcoin: Decimal = ZERO
+    minimum_withdrawal_for_sell_only_eur: Decimal = ZERO
 
     @property
     def has_top_up(self) -> bool:
         return self.top_up_eur > ZERO
 
     @property
+    def has_withdrawal(self) -> bool:
+        return self.top_up_eur < ZERO
+
+    @property
+    def withdrawal_eur(self) -> Decimal:
+        """Requested cash to take out, as a positive amount."""
+
+        return -self.top_up_eur if self.has_withdrawal else ZERO
+
+    @property
     def has_trade_plan(self) -> bool:
-        return self.threshold_rebalance_needed or self.has_top_up
+        return (
+            self.threshold_rebalance_needed
+            or self.has_top_up
+            or self.has_withdrawal
+        )

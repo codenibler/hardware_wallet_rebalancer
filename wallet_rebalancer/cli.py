@@ -43,12 +43,19 @@ from .tracking import (
 )
 
 
-def _non_negative_decimal(value: str) -> Decimal:
+def _finite_decimal(value: str) -> Decimal:
     try:
         parsed = Decimal(value)
     except InvalidOperation as exc:
         raise argparse.ArgumentTypeError("must be a decimal number") from exc
-    if not parsed.is_finite() or parsed < 0:
+    if not parsed.is_finite():
+        raise argparse.ArgumentTypeError("must be a finite number")
+    return parsed
+
+
+def _non_negative_decimal(value: str) -> Decimal:
+    parsed = _finite_decimal(value)
+    if parsed < 0:
         raise argparse.ArgumentTypeError("must be a non-negative finite number")
     return parsed
 
@@ -63,7 +70,7 @@ def _positive_decimal(value: str) -> Decimal:
 def _prompt_top_up() -> Decimal:
     while True:
         print(
-            "Enter new EUR top-up amount [0]: ",
+            "Enter new EUR capital, negative to withdraw [0]: ",
             end="",
             file=sys.stderr,
             flush=True,
@@ -79,7 +86,7 @@ def _prompt_top_up() -> Decimal:
             return Decimal("0")
 
         try:
-            return _non_negative_decimal(raw_value.strip())
+            return _finite_decimal(raw_value.strip())
         except argparse.ArgumentTypeError as exc:
             print(f"Invalid amount: {exc}. Please try again.", file=sys.stderr)
 
@@ -110,7 +117,7 @@ def _prompt_bitvavo_mode() -> bool:
 def _prompt_bitvavo_amount() -> Decimal:
     while True:
         print(
-            "Enter EUR deposit amount: ",
+            "Enter EUR deposit amount, negative to plan a withdrawal: ",
             end="",
             file=sys.stderr,
             flush=True,
@@ -121,7 +128,7 @@ def _prompt_bitvavo_amount() -> Decimal:
             raise ValueError("No deposit amount received") from exc
 
         try:
-            return _non_negative_decimal(raw_value.strip())
+            return _finite_decimal(raw_value.strip())
         except argparse.ArgumentTypeError as exc:
             print(f"Invalid amount: {exc}. Please try again.", file=sys.stderr)
 
@@ -444,7 +451,8 @@ def _track_plan_snapshot(plan: PortfolioPlan):
 
 def _check_command(args: argparse.Namespace) -> int:
     config = load_config()
-    args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
+    if getattr(args, "top_up", None) is None:
+        args.top_up = Decimal("0") if args.no_prompt else _prompt_top_up()
     plan = _plan_from_args(args, config)
     summary = (
         _track_plan_snapshot(plan)
@@ -610,10 +618,13 @@ def _bitvavo_top_up_command(args: argparse.Namespace) -> int:
 def _interactive_bitvavo_command() -> int:
     confirm = _prompt_bitvavo_mode()
     amount = _prompt_bitvavo_amount()
-    if amount == ZERO:
+    # Bitvavo only ever buys and withdraws to the hardware wallets, so a
+    # request to take capital out is answered with a read-only sell plan.
+    if amount <= ZERO:
         return _check_command(
             argparse.Namespace(
                 no_prompt=True,
+                top_up=amount,
                 holdings_file=None,
                 prices_file=None,
                 threshold=None,

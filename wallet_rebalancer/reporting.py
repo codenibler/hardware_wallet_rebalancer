@@ -46,6 +46,14 @@ def render_text(plan: PortfolioPlan) -> str:
             "deploy the requested top-up while returning exactly to target at "
             "snapshot prices."
         )
+    elif plan.has_withdrawal:
+        status = "NO THRESHOLD REBALANCE NEEDED — WITHDRAWAL PLAN AVAILABLE"
+        reason = (
+            f"Maximum allocation drift {_percent(plan.max_abs_drift)} is below "
+            f"the {_percent(plan.threshold)} threshold. The transactions below "
+            f"release {_money(plan.withdrawal_eur)} while leaving the "
+            "remaining portfolio exactly on target at snapshot prices."
+        )
     else:
         status = "NO REBALANCE NEEDED"
         reason = (
@@ -61,7 +69,11 @@ def render_text(plan: PortfolioPlan) -> str:
         f"Holdings fetched: {_utc(plan.holdings_as_of)}",
         f"Prices as of:     {_utc(plan.prices_as_of)} ({plan.price_source})",
         f"Current value:    {_money(plan.current_total_eur)}",
-        f"Top-up capital:   {_money(plan.top_up_eur)}",
+        (
+            f"Cash withdrawal:  {_money(plan.withdrawal_eur)}"
+            if plan.has_withdrawal
+            else f"Top-up capital:   {_money(plan.top_up_eur)}"
+        ),
         f"Post-fee target:  {_money(plan.desired_invested_total_eur)}",
         (
             f"Estimated fees:   {_money(plan.estimated_fees_eur)} "
@@ -115,21 +127,33 @@ def render_text(plan: PortfolioPlan) -> str:
             ),
             ZERO,
         )
+        cash_check = (
+            "Cash check: gross sells - gross buys - estimated fees "
+            f"= {_money(sells - buys - plan.estimated_fees_eur)} released"
+            if plan.has_withdrawal
+            else (
+                "Cash check: gross buys - gross sells + estimated fees "
+                f"= {_money(buys - sells + plan.estimated_fees_eur)}"
+            )
+        )
         lines.extend(
             [
                 "",
                 f"Gross buys:  {_money(buys)}",
                 f"Gross sells: {_money(sells)}",
-                (
-                    "Cash check: gross buys - gross sells + estimated fees "
-                    f"= {_money(buys - sells + plan.estimated_fees_eur)}"
-                ),
+                cash_check,
             ]
         )
-        if sells > ZERO and plan.top_up_eur > ZERO:
+        if sells > ZERO and plan.has_top_up:
             lines.append(
                 "A buy-only exact rebalance would require a top-up of at least "
                 f"{_money(plan.minimum_top_up_for_buy_only_eur)} at this snapshot."
+            )
+        if buys > ZERO and plan.has_withdrawal:
+            lines.append(
+                "A sell-only exact rebalance would require withdrawing at least "
+                f"{_money(plan.minimum_withdrawal_for_sell_only_eur)} at this "
+                "snapshot."
             )
 
     if plan.pending_bitcoin != ZERO:
@@ -157,8 +181,13 @@ def render_order_message(plan: PortfolioPlan) -> str:
             (
                 f"The divergence of {_percent(plan.max_abs_drift)} has reached "
                 f"or exceeded the {_percent(plan.threshold)} threshold. This is "
-                "how to return it to the desired state."
-                " The configured fee estimate is used below."
+                "how to return it to the desired state"
+                + (
+                    f" while releasing {_money(plan.withdrawal_eur)}."
+                    if plan.has_withdrawal
+                    else "."
+                )
+                + " The configured fee estimate is used below."
             ),
             "",
         ]
@@ -171,6 +200,20 @@ def render_order_message(plan: PortfolioPlan) -> str:
                 f"{_percent(plan.threshold)} threshold, so no threshold "
                 "rebalance is needed. This is how to invest the new capital "
                 "while returning to the desired allocation."
+                " The configured fee estimate is used below."
+            ),
+            "",
+        ]
+    elif plan.has_withdrawal:
+        lines = [
+            "Greetings cryptopian. Your portfolio is in balance.",
+            "",
+            (
+                f"The divergence of {_percent(plan.max_abs_drift)} is below the "
+                f"{_percent(plan.threshold)} threshold, so no threshold "
+                "rebalance is needed. This is how to release "
+                f"{_money(plan.withdrawal_eur)} while keeping what remains on "
+                "the desired allocation."
                 " The configured fee estimate is used below."
             ),
             "",
@@ -238,15 +281,20 @@ def plan_to_dict(plan: PortfolioPlan) -> dict[str, Any]:
             else "no_rebalance_needed"
         ),
         "top_up_plan_included": plan.has_top_up,
+        "withdrawal_plan_included": plan.has_withdrawal,
         "threshold": str(plan.threshold),
         "max_abs_drift": str(plan.max_abs_drift),
         "current_total_eur": str(plan.current_total_eur),
         "top_up_eur": str(plan.top_up_eur),
+        "withdrawal_eur": str(plan.withdrawal_eur),
         "estimated_fee_bps": str(plan.estimated_fee_bps),
         "estimated_fees_eur": str(plan.estimated_fees_eur),
         "desired_invested_total_eur": str(plan.desired_invested_total_eur),
         "minimum_top_up_for_buy_only_eur": str(
             plan.minimum_top_up_for_buy_only_eur
+        ),
+        "minimum_withdrawal_for_sell_only_eur": str(
+            plan.minimum_withdrawal_for_sell_only_eur
         ),
         "holdings_as_of": _utc(plan.holdings_as_of),
         "prices_as_of": _utc(plan.prices_as_of),

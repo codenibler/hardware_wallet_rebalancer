@@ -7,7 +7,9 @@ A portfolio monitor which tracks holdings against desired split of
 - LINK: 10%
 and recommends rebalances when allocation deviates more than 5%. It notifies
 you of adjustments through a Telegram bot and can execute a manually deposited
-top-up through Bitvavo.
+top-up through Bitvavo. Capital going the other way is supported too: enter a
+negative amount anywhere a top-up is asked for and you get a read-only plan of
+what to sell so the portfolio you keep stays on target.
 
 Tracks performance of this rebalancing strategy vs. a buy & hold. Every
 portfolio check compares the balances from the configured XPUBs and wallet
@@ -103,6 +105,21 @@ but the trading credentials are never loaded and nothing is submitted. Typing
 checks pass. Enter a deposit amount of `0` to skip the Bitvavo workflow and run
 a read-only portfolio check showing current allocations and rebalance status.
 
+Enter a negative amount to take capital out instead. Bitvavo is never used for
+this, since it only buys and withdraws to the hardware wallets. You get a
+read-only plan showing what to sell so that the portfolio you keep stays on the
+target split:
+
+```
+Enter EUR deposit amount, negative to plan a withdrawal: -5000
+```
+
+The requested cash is released in full and the estimated trading fees come out
+of the remaining portfolio. If the portfolio has drifted, returning what is
+left to target can still require buying an underweight asset; the report then
+names the smallest withdrawal that would be funded by sells alone. A withdrawal
+larger than the portfolio is rejected.
+
 For a non-interactive, zero-deposit portfolio check, use:
 
 ```bash
@@ -117,6 +134,13 @@ estimated fee rate or export JSON:
 ```bash
 python main.py --fee-bps 75
 python main.py --json
+```
+
+The interactive prompt behind `python main.py check` accepts the same negative
+amounts:
+
+```
+Enter new EUR capital, negative to withdraw [0]: -5000
 ```
 
 The scheduled `check` workflow estimates a portfolio rebalance and records its
@@ -214,7 +238,8 @@ python -m wallet_rebalancer discover-telegram
 ```
 
 The scheduled `main.py --no-prompt` workflow is outbound-only. Optional
-long-running bot mode supports allowlisted `/check` and `/check 1000` commands:
+long-running bot mode supports allowlisted `/check`, `/check 1000`, and
+`/check -1000` commands, where a negative amount plans a withdrawal:
 
 ```bash
 python -m wallet_rebalancer bot

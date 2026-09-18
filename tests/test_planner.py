@@ -212,6 +212,201 @@ class PlannerTests(unittest.TestCase):
             Decimal("202.00"),
         )
 
+    def test_withdrawal_sells_a_balanced_portfolio_pro_rata(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="-100",
+        )
+
+        self.assertTrue(plan.has_withdrawal)
+        self.assertFalse(plan.has_top_up)
+        self.assertTrue(plan.has_trade_plan)
+        self.assertEqual(plan.withdrawal_eur, Decimal("100"))
+        self.assertTrue(all(trade.side == "SELL" for trade in plan.trades))
+        self.assertEqual(
+            {trade.asset: trade.notional_eur for trade in plan.trades},
+            {
+                "BTC": Decimal("50"),
+                "ETH": Decimal("25"),
+                "SOL": Decimal("15"),
+                "LINK": Decimal("10"),
+            },
+        )
+        self.assertEqual(plan.desired_invested_total_eur, Decimal("900"))
+
+    def test_withdrawal_trims_the_overweight_asset_hardest(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="-200",
+        )
+
+        trades = {trade.asset: trade for trade in plan.trades}
+        self.assertEqual(trades["BTC"].side, "SELL")
+        self.assertEqual(trades["BTC"].notional_eur, Decimal("200"))
+        self.assertEqual(trades["LINK"].side, "SELL")
+        self.assertEqual(trades["LINK"].notional_eur, Decimal("20"))
+        # SOL is underweight enough that returning to target while taking cash
+        # out still requires buying it back up, while ETH lands on target and
+        # is left alone.
+        self.assertEqual(trades["SOL"].side, "BUY")
+        self.assertEqual(trades["SOL"].notional_eur, Decimal("20"))
+        self.assertNotIn("ETH", trades)
+
+    def test_withdrawal_fees_are_paid_by_the_remaining_portfolio(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="-100",
+            estimated_fee_bps="50",
+        )
+        sells = sum(
+            (trade.notional_eur for trade in plan.trades if trade.side == "SELL"),
+            ZERO,
+        )
+        buys = sum(
+            (trade.notional_eur for trade in plan.trades if trade.side == "BUY"),
+            ZERO,
+        )
+
+        self.assertAlmostEqual(
+            sells - buys - plan.estimated_fees_eur,
+            Decimal("100"),
+            places=7,
+        )
+        self.assertAlmostEqual(
+            plan.desired_invested_total_eur,
+            Decimal("1000") - Decimal("100") - plan.estimated_fees_eur,
+            places=7,
+        )
+
+    def test_sell_only_withdrawal_minimum_is_calculated(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="-100",
+        )
+
+        # SOL is the most underweight sleeve at a level of 100/0.15, so the
+        # portfolio must shrink to that level before nothing has to be bought.
+        self.assertEqual(
+            plan.minimum_withdrawal_for_sell_only_eur,
+            Decimal("1000") - Decimal("100") / Decimal("0.15"),
+        )
+
+    def test_withdrawing_at_the_sell_only_minimum_buys_nothing(self) -> None:
+        holdings = Holdings(
+            amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+            fetched_at=NOW,
+        )
+        minimum = build_plan(
+            holdings,
+            UNIT_PRICES,
+            top_up_eur="-100",
+        ).minimum_withdrawal_for_sell_only_eur
+        plan = build_plan(holdings, UNIT_PRICES, top_up_eur=-minimum)
+
+        self.assertTrue(all(trade.side == "SELL" for trade in plan.trades))
+
+    def test_sell_only_minimum_is_reduced_by_estimated_fees(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            estimated_fee_bps="100",
+        )
+        before_fees = Decimal("1000") - Decimal("100") / Decimal("0.15")
+
+        self.assertEqual(
+            plan.minimum_withdrawal_for_sell_only_eur,
+            before_fees * Decimal("0.99"),
+        )
+
+    def test_withdrawal_cannot_exceed_the_portfolio_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "is not funded by"):
+            build_plan(
+                Holdings(
+                    amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                    fetched_at=NOW,
+                ),
+                UNIT_PRICES,
+                top_up_eur="-1000",
+            )
+
+    def test_withdrawal_report_explains_the_released_cash(self) -> None:
+        plan = build_plan(
+            Holdings(
+                amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                fetched_at=NOW,
+            ),
+            UNIT_PRICES,
+            top_up_eur="-100",
+        )
+        report = render_text(plan)
+        message = render_order_message(plan)
+
+        self.assertIn("WITHDRAWAL PLAN AVAILABLE", report)
+        self.assertIn("Cash withdrawal:  €100.00", report)
+        self.assertNotIn("Top-up capital", report)
+        self.assertIn(
+            "Cash check: gross sells - gross buys - estimated fees "
+            "= €100.00 released",
+            report,
+        )
+        self.assertIn("release €100.00", message)
+        self.assertIn("🔴", message)
+        self.assertNotIn("🟢", message)
+
+    def test_withdrawal_report_names_the_sell_only_minimum(self) -> None:
+        report = render_text(
+            build_plan(
+                Holdings(
+                    amounts={"BTC": 600, "ETH": 200, "SOL": 100, "LINK": 100},
+                    fetched_at=NOW,
+                ),
+                UNIT_PRICES,
+                top_up_eur="-100",
+            )
+        )
+
+        self.assertIn(
+            "A sell-only exact rebalance would require withdrawing at least "
+            "€333.33",
+            report,
+        )
+
+    def test_withdrawal_audit_json_records_both_signs(self) -> None:
+        payload = plan_to_dict(
+            build_plan(
+                Holdings(
+                    amounts={"BTC": 500, "ETH": 250, "SOL": 150, "LINK": 100},
+                    fetched_at=NOW,
+                ),
+                UNIT_PRICES,
+                top_up_eur="-100",
+            )
+        )
+
+        self.assertTrue(payload["withdrawal_plan_included"])
+        self.assertFalse(payload["top_up_plan_included"])
+        self.assertEqual(payload["top_up_eur"], "-100")
+        self.assertEqual(payload["withdrawal_eur"], "100")
+
     def test_fee_adjusted_plan_is_self_financing(self) -> None:
         plan = build_plan(
             Holdings(
