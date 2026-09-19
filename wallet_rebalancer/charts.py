@@ -18,7 +18,10 @@ GRID = "#334155"
 TEXT = "#e2e8f0"
 MUTED = "#94a3b8"
 PERFORMANCE_BLUE = "#3b82f6"
+PERFORMANCE_BLUE_RGB = (59, 130, 246)
 PERFORMANCE_AMBER = "#f59e0b"
+PERFORMANCE_GREEN = "#22c55e"
+PERFORMANCE_RED = "#ef4444"
 TARGET = "#f8fafc"
 ASSET_COLORS = {
     "BTC": "#fbbf24",
@@ -72,6 +75,10 @@ def _save(image: Image.Image, path: Path) -> Path:
 
 def _money(value: Decimal) -> str:
     return f"€{value:,.0f}"
+
+
+def _percent(value: Decimal) -> str:
+    return f"{value * 100:+.1f}%"
 
 
 def _dotted_line(
@@ -199,21 +206,50 @@ def render_allocation_chart(
     return _save(image, path)
 
 
+def _period_returns(
+    cumulative: list[tuple[datetime, Decimal]],
+) -> list[Decimal]:
+    """Derive period-over-period returns from a chained cumulative return."""
+
+    one = Decimal("1")
+    periods = [Decimal(0)]
+    for index in range(1, len(cumulative)):
+        previous_base = one + cumulative[index - 1][1]
+        current_base = one + cumulative[index][1]
+        if previous_base == 0:
+            periods.append(Decimal(0))
+            continue
+        periods.append(current_base / previous_base - one)
+    return periods
+
+
 def render_performance_chart(
     *,
     actual: Iterable[tuple[datetime, Decimal]],
     benchmark: Iterable[tuple[datetime, Decimal]],
+    actual_returns: Iterable[tuple[datetime, Decimal]],
     start_date: str,
     path: Path,
 ) -> Path:
-    """Render historical rebalanced and buy-and-hold portfolio values."""
+    """Render an equity curve of rebalanced vs buy-and-hold value, with the
+    rebalanced portfolio's period-over-period return as bars underneath.
+    """
 
     actual_points, benchmark_points = list(actual), list(benchmark)
-    image = Image.new("RGB", (1200, 675), BACKGROUND)
+    period_returns = _period_returns(list(actual_returns))
+    count = len(actual_points)
+
+    image = Image.new("RGB", (1200, 760), BACKGROUND)
     draw = ImageDraw.Draw(image)
     title_font, body_font = _font(30, bold=True), _font(18)
     small_font = _font(15)
-    left, right, top, bottom = 115, 1145, 130, 570
+
+    left, right = 115, 1145
+    value_top, value_bottom = 120, 460
+    returns_top, returns_bottom = 495, 615
+    axis_label_y = 645
+    summary_y = 705
+
     values = [value for _, value in actual_points + benchmark_points]
     low, high = min(values), max(values)
     padding = max(
@@ -225,12 +261,13 @@ def render_performance_chart(
     span = high - low
 
     def x(index: int) -> int:
-        if len(actual_points) == 1:
+        if count == 1:
             return (left + right) // 2
-        return left + int(index * (right - left) / (len(actual_points) - 1))
+        return left + int(index * (right - left) / (count - 1))
 
-    def y(value: Decimal) -> int:
-        return top + int(float((high - value) / span) * (bottom - top))
+    def value_y(value: Decimal) -> int:
+        fraction = float((high - value) / span)
+        return value_top + int(fraction * (value_bottom - value_top))
 
     draw.text((left, 34), "Portfolio performance", fill=TEXT, font=title_font)
     draw.text(
@@ -239,9 +276,10 @@ def render_performance_chart(
         fill=MUTED,
         font=body_font,
     )
+
     for tick in range(6):
         value = high - span * Decimal(tick) / Decimal(5)
-        position = y(value)
+        position = value_y(value)
         draw.line((left, position, right, position), fill=GRID, width=1)
         draw.text(
             (left - 14, position),
@@ -251,35 +289,94 @@ def render_performance_chart(
             anchor="rm",
         )
 
-    for label, points, color in (
-        ("Rebalanced", actual_points, PERFORMANCE_BLUE),
-        ("Buy & hold", benchmark_points, PERFORMANCE_AMBER),
+    actual_coordinates = [
+        (x(index), value_y(value)) for index, (_, value) in enumerate(actual_points)
+    ]
+    benchmark_coordinates = [
+        (x(index), value_y(value))
+        for index, (_, value) in enumerate(benchmark_points)
+    ]
+
+    # Shade the area under the rebalanced (actual) line for an equity-curve look.
+    if len(actual_coordinates) > 1:
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        ImageDraw.Draw(overlay).polygon(
+            [
+                *actual_coordinates,
+                (actual_coordinates[-1][0], value_bottom),
+                (actual_coordinates[0][0], value_bottom),
+            ],
+            fill=(*PERFORMANCE_BLUE_RGB, 40),
+        )
+        image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+        draw = ImageDraw.Draw(image)
+
+    if len(benchmark_coordinates) > 1:
+        draw.line(benchmark_coordinates, fill=PERFORMANCE_AMBER, width=4, joint="curve")
+    if len(actual_coordinates) > 1:
+        draw.line(actual_coordinates, fill=PERFORMANCE_BLUE, width=4, joint="curve")
+
+    for label, color, legend_x in (
+        ("Rebalanced", PERFORMANCE_BLUE, 760),
+        ("Buy & hold", PERFORMANCE_AMBER, 955),
     ):
-        coordinates = [(x(index), y(value)) for index, (_, value) in enumerate(points)]
-        if len(coordinates) > 1:
-            draw.line(coordinates, fill=color, width=5, joint="curve")
-        for point in coordinates:
-            draw.ellipse(
-                (point[0] - 5, point[1] - 5, point[0] + 5, point[1] + 5),
-                fill=BACKGROUND,
-                outline=color,
-                width=3,
-            )
-        legend_x = 760 if label == "Rebalanced" else 955
         draw.line((legend_x, 47, legend_x + 30, 47), fill=color, width=5)
         draw.text((legend_x + 40, 47), label, fill=TEXT, font=small_font, anchor="lm")
+
+    # Period-return bar chart: green above zero, red below zero.
+    draw.text(
+        (left, returns_top - 24),
+        "Rebalanced return per period",
+        fill=MUTED,
+        font=small_font,
+    )
+    returns_mid = (returns_top + returns_bottom) // 2
+    half_height = (returns_bottom - returns_top) / 2
+    magnitude = max((abs(value) for value in period_returns), default=Decimal(0))
+    scale = magnitude * Decimal("1.15") if magnitude > 0 else Decimal("0.01")
+
+    def bar_y(value: Decimal) -> int:
+        return returns_mid - int(float(value / scale) * half_height)
+
+    for fraction in (Decimal(1), Decimal("0.5"), Decimal(0), Decimal("-0.5"), Decimal(-1)):
+        tick_value = scale * fraction
+        position = bar_y(tick_value)
+        draw.line(
+            (left, position, right, position),
+            fill=MUTED if fraction == 0 else GRID,
+            width=1,
+        )
+        draw.text(
+            (left - 14, position),
+            _percent(tick_value),
+            fill=MUTED,
+            font=small_font,
+            anchor="rm",
+        )
+
+    slot = (right - left) / (count - 1) if count > 1 else (right - left)
+    bar_half_width = max(2, int(slot * 0.35))
+    for index, period_return in enumerate(period_returns):
+        center = x(index)
+        top_y = bar_y(max(period_return, Decimal(0)))
+        bottom_y = bar_y(min(period_return, Decimal(0)))
+        color = PERFORMANCE_GREEN if period_return >= 0 else PERFORMANCE_RED
+        draw.rectangle(
+            (center - bar_half_width, top_y, center + bar_half_width, bottom_y),
+            fill=color,
+        )
 
     indexes = sorted(
         {
             0,
-            len(actual_points) - 1,
-            *(round(i * (len(actual_points) - 1) / 4) for i in range(5)),
+            count - 1,
+            *(round(i * (count - 1) / 4) for i in range(5)),
         }
     )
     for index in indexes:
         timestamp = actual_points[index][0]
         draw.text(
-            (x(index), bottom + 30),
+            (x(index), axis_label_y),
             timestamp.strftime("%Y-%m-%d"),
             fill=MUTED,
             font=small_font,
@@ -290,7 +387,7 @@ def render_performance_chart(
     latest_benchmark = benchmark_points[-1][1]
     difference = latest_actual - latest_benchmark
     draw.text(
-        (left, 633),
+        (left, summary_y),
         f"Latest: {_money(latest_actual)} vs {_money(latest_benchmark)}  ·  difference {difference:+,.0f} EUR",
         fill=TEXT,
         font=body_font,

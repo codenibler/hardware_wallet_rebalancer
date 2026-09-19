@@ -1281,6 +1281,7 @@ def _write_exports(
     render_performance_chart(
         actual=_points(observations, "actual_value_eur"),
         benchmark=_points(observations, "buy_hold_value_eur"),
+        actual_returns=_points(observations, "actual_return"),
         start_date=start_date.isoformat(),
         path=performance_image_path,
     )
