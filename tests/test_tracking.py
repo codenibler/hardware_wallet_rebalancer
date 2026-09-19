@@ -245,6 +245,92 @@ class PortfolioTrackingTests(unittest.TestCase):
             {"BTC": "50", "ETH": "25", "SOL": "15", "LINK": "10"},
         )
 
+    def test_automatically_detects_outgoing_asset_units_as_a_withdrawal(
+        self,
+    ) -> None:
+        initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
+        prices = {"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1}
+        self._record(initial, prices, START)
+        after_withdrawal = {"BTC": 30, "ETH": 25, "SOL": 15, "LINK": 10}
+
+        summary = self._record(after_withdrawal, prices, LATER)
+
+        self.assertEqual(summary.actual_value_eur, Decimal("80"))
+        self.assertEqual(summary.buy_hold_value_eur, Decimal("80"))
+        self.assertEqual(summary.actual_return, ZERO)
+        self.assertEqual(summary.buy_hold_return, ZERO)
+        self.assertEqual(summary.total_contributions_eur, Decimal("-20"))
+        self.assertEqual(summary.total_benchmark_fees_eur, ZERO)
+
+        payload = json.loads(self.data_path.read_text(encoding="utf-8"))
+        flow = payload["cash_flows"][0]
+        self.assertEqual(flow["type"], "detected_withdrawal")
+        self.assertEqual(Decimal(flow["gross_amount_eur"]), Decimal("-20"))
+        self.assertEqual(flow["fee_bps"], "0")
+        benchmark_amounts = {
+            asset: Decimal(amount)
+            for asset, amount in payload["benchmark"]["amounts"].items()
+        }
+        self.assertEqual(benchmark_amounts["BTC"], Decimal("40"))
+        self.assertEqual(benchmark_amounts["ETH"], Decimal("20"))
+        self.assertEqual(benchmark_amounts["SOL"], Decimal("12"))
+        self.assertEqual(benchmark_amounts["LINK"], Decimal("8"))
+        latest = payload["observations"][-1]
+        self.assertEqual(latest["external_cash_flow_eur"], "-20")
+
+    def test_repairs_a_legacy_withdrawal_recorded_with_no_cash_flow(self) -> None:
+        initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
+        prices = {"BTC": 1, "ETH": 1, "SOL": 1, "LINK": 1}
+        self._record(initial, prices, START)
+        after_withdrawal = {"BTC": 30, "ETH": 25, "SOL": 15, "LINK": 10}
+        self._record(after_withdrawal, prices, LATER)
+
+        # Re-create the legacy version of the second snapshot: the withdrawal
+        # was invisible, so the benchmark never sold anything and the
+        # rebalanced portfolio alone appeared to have dropped in value.
+        payload = json.loads(self.data_path.read_text(encoding="utf-8"))
+        payload["cash_flows"] = []
+        payload["benchmark"]["amounts"] = {
+            asset: str(amount) for asset, amount in initial.items()
+        }
+        legacy = payload["observations"][-1]
+        legacy.update(
+            {
+                "benchmark_amounts": {
+                    asset: str(amount) for asset, amount in initial.items()
+                },
+                "buy_hold_value_eur": "100",
+                "actual_return": "-0.2",
+                "buy_hold_return": "0",
+                "outperformance": "-0.2",
+                "value_difference_eur": "-20",
+                "external_cash_flow_eur": "0",
+                "deposit_fee_bps": "0",
+                "benchmark_fee_eur": "0",
+                "benchmark_net_invested_eur": "0",
+                "total_contributions_eur": "0",
+                "total_benchmark_fees_eur": "0",
+            }
+        )
+        self.data_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        summary = self._record(after_withdrawal, prices, AFTER_DEPOSIT)
+
+        repaired = json.loads(self.data_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(repaired["cash_flows"]), 1)
+        self.assertEqual(repaired["cash_flows"][0]["type"], "detected_withdrawal")
+        self.assertEqual(
+            Decimal(repaired["cash_flows"][0]["gross_amount_eur"]),
+            Decimal("-20"),
+        )
+        repaired_second = repaired["observations"][1]
+        self.assertEqual(Decimal(repaired_second["buy_hold_value_eur"]), Decimal("80"))
+        self.assertEqual(Decimal(repaired_second["actual_return"]), ZERO)
+        self.assertEqual(Decimal(repaired_second["buy_hold_return"]), ZERO)
+        self.assertEqual(summary.actual_value_eur, Decimal("80"))
+        self.assertEqual(summary.buy_hold_value_eur, Decimal("80"))
+        self.assertEqual(summary.total_contributions_eur, Decimal("-20"))
+
     def test_repairs_the_latest_legacy_untracked_incoming_assets(self) -> None:
         initial = {"BTC": 50, "ETH": 25, "SOL": 15, "LINK": 10}
         prices = {"BTC": 2, "ETH": 4, "SOL": 3, "LINK": 5}
