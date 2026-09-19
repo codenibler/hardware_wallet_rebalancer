@@ -77,6 +77,10 @@ def _money(value: Decimal) -> str:
     return f"€{value:,.0f}"
 
 
+def _money_signed(value: Decimal) -> str:
+    return f"€{value:+,.0f}"
+
+
 def _percent(value: Decimal) -> str:
     return f"{value * 100:+.1f}%"
 
@@ -227,29 +231,123 @@ def render_performance_chart(
     *,
     actual: Iterable[tuple[datetime, Decimal]],
     benchmark: Iterable[tuple[datetime, Decimal]],
+    actual_pnl: Iterable[tuple[datetime, Decimal]],
+    benchmark_pnl: Iterable[tuple[datetime, Decimal]],
     actual_returns: Iterable[tuple[datetime, Decimal]],
     start_date: str,
     path: Path,
 ) -> Path:
-    """Render an equity curve of rebalanced vs buy-and-hold value, with the
-    rebalanced portfolio's period-over-period return as bars underneath.
+    """Render three stacked panels for rebalanced vs buy-and-hold:
+
+    a cumulative PnL line chart on top, an equity curve of portfolio value
+    in the middle, and the rebalanced portfolio's period-over-period return
+    as bars underneath.
     """
 
     actual_points, benchmark_points = list(actual), list(benchmark)
+    actual_pnl_points, benchmark_pnl_points = list(actual_pnl), list(benchmark_pnl)
     period_returns = _period_returns(list(actual_returns))
     count = len(actual_points)
 
-    image = Image.new("RGB", (1200, 760), BACKGROUND)
+    image = Image.new("RGB", (1200, 820), BACKGROUND)
     draw = ImageDraw.Draw(image)
     title_font, body_font = _font(30, bold=True), _font(18)
     small_font = _font(15)
 
     left, right = 115, 1145
-    value_top, value_bottom = 120, 460
-    returns_top, returns_bottom = 495, 615
-    axis_label_y = 645
-    summary_y = 705
+    pnl_top, pnl_bottom = 140, 290
+    value_top, value_bottom = 335, 575
+    returns_top, returns_bottom = 615, 700
+    axis_label_y = 730
+    summary_y = 785
 
+    def x(index: int) -> int:
+        if count == 1:
+            return (left + right) // 2
+        return left + int(index * (right - left) / (count - 1))
+
+    draw.text((left, 34), "Portfolio performance", fill=TEXT, font=title_font)
+    draw.text(
+        (left, 78),
+        f"Rebalancing vs buy-and-hold  ·  benchmark since {start_date}",
+        fill=MUTED,
+        font=body_font,
+    )
+    for label, color, legend_x in (
+        ("Rebalanced", PERFORMANCE_BLUE, 760),
+        ("Buy & hold", PERFORMANCE_AMBER, 955),
+    ):
+        draw.line((legend_x, 47, legend_x + 30, 47), fill=color, width=5)
+        draw.text((legend_x + 40, 47), label, fill=TEXT, font=small_font, anchor="lm")
+
+    # Cumulative PnL line chart: profit/loss in EUR versus capital contributed.
+    draw.text(
+        (left, pnl_top - 24),
+        "Cumulative PnL (EUR)",
+        fill=MUTED,
+        font=small_font,
+    )
+    pnl_values = [value for _, value in actual_pnl_points + benchmark_pnl_points]
+    pnl_low = min(pnl_values + [Decimal(0)])
+    pnl_high = max(pnl_values + [Decimal(0)])
+    pnl_padding = max(
+        (pnl_high - pnl_low) * Decimal("0.10"),
+        max(abs(pnl_high), abs(pnl_low)) * Decimal("0.02"),
+        Decimal(1),
+    )
+    pnl_low, pnl_high = pnl_low - pnl_padding, pnl_high + pnl_padding
+    pnl_span = pnl_high - pnl_low
+
+    def pnl_y(value: Decimal) -> int:
+        fraction = float((pnl_high - value) / pnl_span)
+        return pnl_top + int(fraction * (pnl_bottom - pnl_top))
+
+    for tick in range(6):
+        value = pnl_high - pnl_span * Decimal(tick) / Decimal(5)
+        position = pnl_y(value)
+        draw.line((left, position, right, position), fill=GRID, width=1)
+        draw.text(
+            (left - 14, position),
+            _money_signed(value),
+            fill=MUTED,
+            font=small_font,
+            anchor="rm",
+        )
+    draw.line(
+        (left, pnl_y(Decimal(0)), right, pnl_y(Decimal(0))),
+        fill=MUTED,
+        width=1,
+    )
+
+    actual_pnl_coordinates = [
+        (x(index), pnl_y(value)) for index, (_, value) in enumerate(actual_pnl_points)
+    ]
+    benchmark_pnl_coordinates = [
+        (x(index), pnl_y(value))
+        for index, (_, value) in enumerate(benchmark_pnl_points)
+    ]
+    if len(benchmark_pnl_coordinates) > 1:
+        draw.line(
+            benchmark_pnl_coordinates,
+            fill=PERFORMANCE_AMBER,
+            width=4,
+            joint="curve",
+        )
+    if len(actual_pnl_coordinates) > 1:
+        draw.line(
+            actual_pnl_coordinates,
+            fill=PERFORMANCE_BLUE,
+            width=4,
+            joint="curve",
+        )
+
+    # Equity curve: portfolio value in EUR.
+    draw.text(
+        (left, value_top - 24),
+        "Portfolio value (EUR)",
+        fill=MUTED,
+        font=small_font,
+    )
     values = [value for _, value in actual_points + benchmark_points]
     low, high = min(values), max(values)
     padding = max(
@@ -260,22 +358,9 @@ def render_performance_chart(
     low, high = low - padding, high + padding
     span = high - low
 
-    def x(index: int) -> int:
-        if count == 1:
-            return (left + right) // 2
-        return left + int(index * (right - left) / (count - 1))
-
     def value_y(value: Decimal) -> int:
         fraction = float((high - value) / span)
         return value_top + int(fraction * (value_bottom - value_top))
-
-    draw.text((left, 34), "Portfolio performance", fill=TEXT, font=title_font)
-    draw.text(
-        (left, 78),
-        f"Rebalancing vs buy-and-hold  ·  benchmark since {start_date}",
-        fill=MUTED,
-        font=body_font,
-    )
 
     for tick in range(6):
         value = high - span * Decimal(tick) / Decimal(5)
@@ -315,13 +400,6 @@ def render_performance_chart(
         draw.line(benchmark_coordinates, fill=PERFORMANCE_AMBER, width=4, joint="curve")
     if len(actual_coordinates) > 1:
         draw.line(actual_coordinates, fill=PERFORMANCE_BLUE, width=4, joint="curve")
-
-    for label, color, legend_x in (
-        ("Rebalanced", PERFORMANCE_BLUE, 760),
-        ("Buy & hold", PERFORMANCE_AMBER, 955),
-    ):
-        draw.line((legend_x, 47, legend_x + 30, 47), fill=color, width=5)
-        draw.text((legend_x + 40, 47), label, fill=TEXT, font=small_font, anchor="lm")
 
     # Period-return bar chart: green above zero, red below zero.
     draw.text(

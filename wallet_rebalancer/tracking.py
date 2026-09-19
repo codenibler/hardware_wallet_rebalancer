@@ -1104,6 +1104,37 @@ def _points(
     ]
 
 
+def _pnl_points(
+    observations: list[dict[str, object]],
+    value_key: str,
+) -> list[tuple[datetime, Decimal]]:
+    """Cumulative EUR profit/loss: value minus capital contributed so far.
+
+    The first observation always has zero contributions and its value
+    equals the benchmark's starting value, so PnL starts at zero and later
+    points net out deposits/withdrawals the same way the return figures do.
+    """
+
+    if not observations:
+        return []
+    initial_value = _decimal(
+        observations[0]["actual_value_eur"],
+        "actual_value_eur",
+    )
+    points = []
+    for row in observations:
+        recorded_at = _utc(
+            datetime.fromisoformat(str(row["recorded_at"]).replace("Z", "+00:00"))
+        )
+        value = _decimal(row[value_key], value_key)
+        contributions = _decimal(
+            row["total_contributions_eur"],
+            "total_contributions_eur",
+        )
+        points.append((recorded_at, value - initial_value - contributions))
+    return points
+
+
 def _format_euros(value: Decimal) -> str:
     return f"€{value:,.0f}"
 
@@ -1281,6 +1312,8 @@ def _write_exports(
     render_performance_chart(
         actual=_points(observations, "actual_value_eur"),
         benchmark=_points(observations, "buy_hold_value_eur"),
+        actual_pnl=_pnl_points(observations, "actual_value_eur"),
+        benchmark_pnl=_pnl_points(observations, "buy_hold_value_eur"),
         actual_returns=_points(observations, "actual_return"),
         start_date=start_date.isoformat(),
         path=performance_image_path,
